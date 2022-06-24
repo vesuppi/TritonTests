@@ -26,7 +26,7 @@ import pytriton as triton
 M = 16
 K = M
 N = M
-BLOCK = 16
+BLOCK = 4
 
 def cdiv(x, y):
     return (x + y - 1) // y
@@ -36,22 +36,28 @@ def _kernel(a_ptr, b_ptr, c_ptr, M, N, K, t1,
             BLOCK: tl.constexpr):
     mid = tl.program_id(0)
     nid = tl.program_id(1)
+    print('program id:', mid, nid)
 
-    a_start_addr = a_ptr + mid * BLOCK * K
+    a_start_addr = mid * BLOCK * K
     a_block_ptrs = a_start_addr + tl.arange(0, BLOCK * BLOCK)
     a_block_ptrs = tl.reshape(a_block_ptrs, (BLOCK, BLOCK))
 
-    b_start_addr = b_ptr + nid * BLOCK * BLOCK
+    b_start_addr = nid * BLOCK * BLOCK
     b_block_ptrs = b_start_addr + tl.arange(0, BLOCK * BLOCK)
     b_block_ptrs = tl.reshape(b_block_ptrs, (BLOCK, BLOCK))
 
     c = tl.zeros([BLOCK, BLOCK], dtype=tl.float32)
     for k in range(K//BLOCK):
-        #a = tl.load(a_block_ptrs)
-        #b = tl.load(b_block_ptrs)
-        #c += tl.dot(a, b)
+        a = tl.load(a_ptr, a_block_ptrs)
+        b = tl.load(b_ptr, b_block_ptrs)
+        c += tl.dot(a, b)
+
+        #print('a:', a_block_ptrs)
+        #print('b:', b_block_ptrs)
+
         a_block_ptrs += BLOCK * BLOCK
         b_block_ptrs += BLOCK * N
+
 
 
     c = c.to(tl.float16)
@@ -62,13 +68,8 @@ def _kernel(a_ptr, b_ptr, c_ptr, M, N, K, t1,
     c_block_ptrs = c_start_addr + tl.arange(0, BLOCK * BLOCK)
     c_block_ptrs = tl.reshape(c_block_ptrs, (BLOCK, BLOCK))
 
-    # tl.store(c_block_ptrs, c)
-    a_rows = mid * BLOCK + tl.arange(0, BLOCK)
-    b_cols = nid * BLOCK + tl.arange(0, BLOCK)
-    c_ptrs = c_ptr + a_rows[:, None] * N + b_cols[None, :]
-    print(a_rows[:, None] * N + b_cols[None, :])
-    print(c_block_ptrs)
-    #tl.store(c_ptrs, c)
+    #print(c_block_ptrs)
+    tl.store(c_ptr, c_block_ptrs, c)
 
 
 # def mm1(a, b):
@@ -125,13 +126,13 @@ def from_block_format(b, M, N, BLOCK_M, BLOCK_N):
 # sys.exit(1)
 
 a = torch.randn(M, K, device='cuda', dtype=torch.float16)
-b = torch.eye(K, N, device=a.device, dtype=a.dtype)
+b = torch.randn(K, N, device=a.device, dtype=a.dtype)
 c = torch.mm(a, b)
 
 a1 = to_block_format(a, BLOCK, BLOCK)
 b1 = to_block_format(b, BLOCK, BLOCK)
 c1 = mm1(a1, b1)
-#c2 = from_block_format(torch.flatten(c1), M, N, BLOCK, BLOCK)
+c2 = from_block_format(torch.flatten(c1), M, N, BLOCK, BLOCK)
 
 # torch_ms, _, _ = triton.testing.do_bench(lambda: torch.mm(a, b))
 # triton_ms, _, _ = triton.testing.do_bench(lambda: mm1(a1, b1))
@@ -148,7 +149,8 @@ def myprint(a):
 
 
 # torch.set_printoptions(edgeitems=8)
-#myprint(c)
+myprint(c)
+myprint(c2)
 #print(c1)
 # print(c)
 # print(c1)
