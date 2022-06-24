@@ -39,19 +39,19 @@ def _kernel(a_ptr, b_ptr, c_ptr, M, N, K, t1,
         a_block_ptrs += BLOCK * BLOCK
         b_block_ptrs += BLOCK * N
 
-        tl.store(tl.reshape(t1 + tl.arange(0, BLOCK * BLOCK), (BLOCK, BLOCK)), a_block_ptrs)
+        #tl.store(tl.reshape(t1 + tl.arange(0, BLOCK * BLOCK), (BLOCK, BLOCK)), a_block_ptrs)
 
     c = c.to(tl.float16)
 
 
-    # c_start_addr = c_ptr + mid * BLOCK * N + nid * BLOCK * BLOCK
-    # c_block_ptrs = c_start_addr + tl.arange(0, BLOCK * BLOCK)
-    # c_block_ptrs = tl.reshape(c_block_ptrs, (BLOCK, BLOCK))
-    # tl.store(c_block_ptrs, c)
-    a_rows = mid * BLOCK + tl.arange(0, BLOCK)
-    b_cols = nid * BLOCK + tl.arange(0, BLOCK)
-    c_ptrs = c_ptr + a_rows[:, None] * N + b_cols[None, :]
-    tl.store(c_ptrs, c)
+    c_start_addr = c_ptr + mid * BLOCK * N + nid * BLOCK * BLOCK
+    c_block_ptrs = c_start_addr + tl.arange(0, BLOCK * BLOCK)
+    c_block_ptrs = tl.reshape(c_block_ptrs, (BLOCK, BLOCK))
+    tl.store(c_block_ptrs, c)
+    # a_rows = mid * BLOCK + tl.arange(0, BLOCK)
+    # b_cols = nid * BLOCK + tl.arange(0, BLOCK)
+    # c_ptrs = c_ptr + a_rows[:, None] * N + b_cols[None, :]
+    # tl.store(c_ptrs, c)
 
 
 def mm1(a, b):
