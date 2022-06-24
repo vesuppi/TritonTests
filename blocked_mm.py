@@ -1,11 +1,22 @@
-import torch
-import triton
-import triton.language as tl 
-import triton.testing
-import torch.utils.benchmark as benchmark
-from triton_matmul import matmul
-
+import os
 import sys
+
+sys.path.append('/data/home/vesuppi/cluster/projects/pytriton')
+
+import torch
+import triton.testing as testing
+
+import pytl as tl
+import pytriton as triton
+
+
+# import triton
+# import triton.language as tl 
+
+# import torch.utils.benchmark as benchmark
+# from triton_matmul import matmul
+
+
 
 # a = torch.arange(32*32, device='cuda')
 # print(a)
@@ -16,6 +27,9 @@ M = 16
 K = M
 N = M
 BLOCK = 16
+
+def cdiv(x, y):
+    return (x + y - 1) // y
 
 @triton.jit
 def _kernel(a_ptr, b_ptr, c_ptr, M, N, K, t1, 
@@ -33,35 +47,49 @@ def _kernel(a_ptr, b_ptr, c_ptr, M, N, K, t1,
 
     c = tl.zeros([BLOCK, BLOCK], dtype=tl.float32)
     for k in range(K//BLOCK):
-        a = tl.load(a_block_ptrs)
-        b = tl.load(b_block_ptrs)
-        c += tl.dot(a, b)
+        #a = tl.load(a_block_ptrs)
+        #b = tl.load(b_block_ptrs)
+        #c += tl.dot(a, b)
         a_block_ptrs += BLOCK * BLOCK
         b_block_ptrs += BLOCK * N
 
-        tl.store(tl.reshape(t1 + tl.arange(0, BLOCK * BLOCK), (BLOCK, BLOCK)), a_block_ptrs)
 
     c = c.to(tl.float16)
 
 
-    # c_start_addr = c_ptr + mid * BLOCK * N + nid * BLOCK * BLOCK
-    # c_block_ptrs = c_start_addr + tl.arange(0, BLOCK * BLOCK)
-    # c_block_ptrs = tl.reshape(c_block_ptrs, (BLOCK, BLOCK))
+    #c_start_addr = c_ptr + mid * BLOCK * N + nid * BLOCK * BLOCK
+    c_start_addr = mid * BLOCK * N + nid * BLOCK * BLOCK
+    c_block_ptrs = c_start_addr + tl.arange(0, BLOCK * BLOCK)
+    c_block_ptrs = tl.reshape(c_block_ptrs, (BLOCK, BLOCK))
+
     # tl.store(c_block_ptrs, c)
     a_rows = mid * BLOCK + tl.arange(0, BLOCK)
     b_cols = nid * BLOCK + tl.arange(0, BLOCK)
     c_ptrs = c_ptr + a_rows[:, None] * N + b_cols[None, :]
-    tl.store(c_ptrs, c)
+    print(a_rows[:, None] * N + b_cols[None, :])
+    print(c_block_ptrs)
+    #tl.store(c_ptrs, c)
+
+
+# def mm1(a, b):
+#     c = torch.empty([M, N], device=a.device, dtype=a.dtype)
+#     t1 = torch.empty([BLOCK, BLOCK], device=a.device)
+#     # grid = lambda META: (
+#     #     triton.cdiv(M, META['BLOCK_SIZE_M']), triton.cdiv(N, META['BLOCK_SIZE_N']),
+#     # )
+#     grid = (triton.cdiv(M, BLOCK), triton.cdiv(N, BLOCK))
+#     _kernel[grid](a, b, c, M, N, K, t1, BLOCK)
+#     return c
 
 
 def mm1(a, b):
     c = torch.empty([M, N], device=a.device, dtype=a.dtype)
-    t1 = torch.empty([BLOCK, BLOCK], device=a.device, dtype=torch.int64)
+    t1 = torch.empty([BLOCK, BLOCK], device=a.device)
     # grid = lambda META: (
     #     triton.cdiv(M, META['BLOCK_SIZE_M']), triton.cdiv(N, META['BLOCK_SIZE_N']),
     # )
     grid = (triton.cdiv(M, BLOCK), triton.cdiv(N, BLOCK))
-    _kernel[grid](a, b, c, M, N, K, t1, BLOCK)
+    tl.run(_kernel, grid, a, b, c, M, N, K, t1, BLOCK)
     return c
 
 
@@ -70,8 +98,8 @@ def to_block_format(a, BLOCK_M, BLOCK_N):
     b = torch.zeros(M*N, dtype=a.dtype, device=a.device)
     block_size = BLOCK_M * BLOCK_N
     i = 0
-    for m in range(triton.cdiv(M, BLOCK_M)):
-        for n in range(triton.cdiv(N, BLOCK_N)):
+    for m in range(cdiv(M, BLOCK_M)):
+        for n in range(cdiv(N, BLOCK_N)):
             block = a[m*BLOCK_M:(m+1)*BLOCK_M, n*BLOCK_N:(n+1)*BLOCK_N]
             b[i*block_size: (i+1)*block_size] = torch.flatten(block)
             i += 1            
@@ -81,8 +109,8 @@ def from_block_format(b, M, N, BLOCK_M, BLOCK_N):
     a = torch.zeros((M, N), dtype=b.dtype, device=b.device)
     block_size = BLOCK_M * BLOCK_N
     i = 0
-    for m in range(triton.cdiv(M, BLOCK_M)):
-        for n in range(triton.cdiv(N, BLOCK_N)):
+    for m in range(cdiv(M, BLOCK_M)):
+        for n in range(cdiv(N, BLOCK_N)):
             flat_block = b[i*block_size: (i+1)*block_size]
             a[m*BLOCK_M:(m+1)*BLOCK_M, n*BLOCK_N:(n+1)*BLOCK_N] = flat_block.reshape(BLOCK_M, BLOCK_N)
             i += 1
@@ -120,7 +148,7 @@ def myprint(a):
 
 
 # torch.set_printoptions(edgeitems=8)
-myprint(c)
-print(c1)
+#myprint(c)
+#print(c1)
 # print(c)
 # print(c1)
