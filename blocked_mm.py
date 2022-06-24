@@ -97,13 +97,13 @@ def from_block_format(b, M, N, BLOCK_M, BLOCK_N):
 # sys.exit(1)
 
 a = torch.randn(M, K, device='cuda', dtype=torch.float16)
-b = torch.eye(K, N, device=a.device, dtype=a.dtype)
+b = torch.randn(K, N, device=a.device, dtype=a.dtype)
 c = torch.mm(a, b)
 
 a1 = to_block_format(a, BLOCK, BLOCK)
 b1 = to_block_format(b, BLOCK, BLOCK)
 c1 = mm1(a1, b1)
-#c2 = from_block_format(torch.flatten(c1), M, N, BLOCK, BLOCK)
+c2 = from_block_format(torch.flatten(c1), M, N, BLOCK, BLOCK)
 
 # torch_ms, _, _ = triton.testing.do_bench(lambda: torch.mm(a, b))
 # triton_ms, _, _ = triton.testing.do_bench(lambda: mm1(a1, b1))
@@ -121,6 +121,6 @@ def myprint(a):
 
 # torch.set_printoptions(edgeitems=8)
 myprint(c)
-print(c1)
+myprint(c2)
 # print(c)
 # print(c1)
