@@ -23,10 +23,10 @@ import pytriton as triton
 # print(a.reshape([32, 32]))
 # sys.exit(0)
 
-M = 16
+M = 32
 K = M
 N = M
-BLOCK = 4
+BLOCK = 16
 
 def cdiv(x, y):
     return (x + y - 1) // y
@@ -36,7 +36,6 @@ def _kernel(a_ptr, b_ptr, c_ptr, M, N, K, t1,
             BLOCK: tl.constexpr):
     mid = tl.program_id(0)
     nid = tl.program_id(1)
-    print('program id:', mid, nid)
 
     a_start_addr = mid * BLOCK * K
     a_block_ptrs = a_start_addr + tl.arange(0, BLOCK * BLOCK)
