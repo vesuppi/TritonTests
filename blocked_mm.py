@@ -12,10 +12,10 @@ import sys
 # print(a.reshape([32, 32]))
 # sys.exit(0)
 
-M = 16
+M = 2048
 K = M
 N = M
-BLOCK = 16
+BLOCK = 64
 
 def cdiv(x, y):
     if x % y == 0:
@@ -45,7 +45,7 @@ def _kernel(a_ptr, b_ptr, c_ptr, M, N, K, t1,
     for k in range(K//BLOCK):
         a = tl.load(a_block_ptrs)
         b = tl.load(b_block_ptrs)
-        c = tl.dot(b, a)
+        c += tl.dot(b, a)
         #c += a + b
         a_block_ptrs += BLOCK * BLOCK
         b_block_ptrs += BLOCK * N
@@ -83,6 +83,7 @@ def to_block_format(a, BLOCK_M, BLOCK_N):
             i += 1            
     return b
 
+
 def from_block_format(b, M, N, BLOCK_M, BLOCK_N):
     a = torch.zeros((M, N), dtype=b.dtype, device=b.device)
     block_size = BLOCK_M * BLOCK_N
@@ -102,8 +103,8 @@ def from_block_format(b, M, N, BLOCK_M, BLOCK_N):
 # get_block_format(a, 2, 2)
 # sys.exit(1)
 
-#a = torch.randn(M, K, device='cuda', dtype=torch.float16)
-a = torch.arange(M*K, device='cuda', dtype=torch.float16).reshape(M, K)
+a = torch.randn(M, K, device='cuda', dtype=torch.float16)
+#a = torch.arange(M*K, device='cuda', dtype=torch.float16).reshape(M, K)
 b = torch.randn(K, N, device=a.device, dtype=a.dtype)
 c = torch.mm(a, b)
 
@@ -112,9 +113,9 @@ b1 = to_block_format(b, BLOCK, BLOCK)
 c1 = mm1(a1, b1)
 c2 = from_block_format(torch.flatten(c1), M, N, BLOCK, BLOCK)
 
-# torch_ms, _, _ = triton.testing.do_bench(lambda: torch.mm(a, b))
-# triton_ms, _, _ = triton.testing.do_bench(lambda: mm1(a1, b1))
-# print(torch_ms, triton_ms, sep='; ')
+torch_ms, _, _ = triton.testing.do_bench(lambda: torch.mm(a, b))
+triton_ms, _, _ = triton.testing.do_bench(lambda: mm1(a1, b1))
+print(torch_ms, triton_ms, sep='; ')
 
 
 def myprint(a):
@@ -135,7 +136,12 @@ print(b1)
 
 
 # torch.set_printoptions(edgeitems=8)
-myprint(c)
-myprint(c2)
+allclose = torch.allclose(c, c2, rtol=0.01, atol=0.5)
+if allclose:
+    print('allclose: True')
+else:
+    myprint(c)
+    myprint(c2)
+
 # print(c)
 # print(c1)
