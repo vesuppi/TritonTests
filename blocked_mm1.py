@@ -1,4 +1,5 @@
 import sys
+from numpy import format_float_positional
 import torch
 import triton
 import triton.language as tl
@@ -6,12 +7,12 @@ import triton.testing
 
 torch.backends.cuda.matmul.allow_tf32 = True
 
-
-def ceil_div(x, y):
+#@torch.jit.script
+def ceil_div(x: int, y: int):
     return (x + y - 1) // y
 
-
-def to_block_format(a, BLOCK_M, BLOCK_N):
+#@torch.jit.script
+def to_block_format(a, BLOCK_M: int, BLOCK_N: int):
     M, N = a.shape
     outer_m_dim = ceil_div(M, BLOCK_M)
     outer_n_dim = ceil_div(N, BLOCK_N)
@@ -27,11 +28,17 @@ def to_block_format(a, BLOCK_M, BLOCK_N):
     # TODO - Implement/check for padding
     for outer_m in range(outer_m_dim):
         for outer_n in range(outer_n_dim):
-            for inner_m in range(inner_m_dim):
-                for inner_n in range(inner_n_dim):
-                    res[outer_m, outer_n, inner_m, inner_n] = a[
-                        outer_m * BLOCK_M + inner_m, outer_n * BLOCK_N + inner_n
-                    ]
+            res[outer_m, outer_n, 0: inner_m_dim, 0: inner_n_dim] = a[
+                outer_m * BLOCK_M: outer_m * BLOCK_M + inner_m_dim, outer_n * BLOCK_N: outer_n * BLOCK_N + inner_n_dim
+            ]
+            # for inner_m in range(inner_m_dim):
+            #     # res[outer_m, outer_n, inner_m, 0: inner_n_dim] = a[
+            #     #         outer_m * BLOCK_M + inner_m, outer_n * BLOCK_N: outer_n * BLOCK_N + inner_n_dim
+            #     #     ]
+            #     for inner_n in range(inner_n_dim):
+            #         res[outer_m, outer_n, inner_m, inner_n] = a[
+            #             outer_m * BLOCK_M + inner_m, outer_n * BLOCK_N + inner_n
+            #         ]
     return res
 
 
@@ -46,11 +53,14 @@ def from_block_format(a, BLOCK_M, BLOCK_N):
 
     for outer_m in range(outer_m_dim):
         for outer_n in range(outer_n_dim):
-            for inner_m in range(inner_m_dim):
-                for inner_n in range(inner_n_dim):
-                    res[outer_m * BLOCK_M + inner_m, outer_n * BLOCK_N + inner_n] = a[
-                        outer_m, outer_n, inner_m, inner_n
-                    ]
+            res[outer_m * BLOCK_M: outer_m * BLOCK_M + inner_m_dim, outer_n * BLOCK_N: outer_n * BLOCK_N + inner_n_dim] = a[
+                    outer_m, outer_n, 0: inner_m_dim, 0: inner_n_dim
+                ]
+            # for inner_m in range(inner_m_dim):
+            #     for inner_n in range(inner_n_dim):
+            #         res[outer_m * BLOCK_M + inner_m, outer_n * BLOCK_N + inner_n] = a[
+            #             outer_m, outer_n, inner_m, inner_n
+            #         ]
     return res
 
 
@@ -168,6 +178,21 @@ def check_triton_mm():
     K = 128
     N = 256
     BLOCK = 32
+
+    dtype = torch.float16
+    for M in [2048, 4096]:
+        for N in [2048, 4096]:
+            for K in [2048, 4096]:
+            #for K in [4096*2]:
+                a = torch.randn((M, K), device="cuda", dtype=dtype)
+                b = torch.randn((K, N), device="cuda", dtype=dtype)
+
+                ms1 = run_torch(a, b, M, K, N)
+                ms2 = run_triton(a, b, M, K, N, 64, 64, 64)
+                FLOPS1 = 2 * M * K * N / ms1 / 10**9
+                FLOPS2 = 2 * M * K * N / ms2 / 10**9
+                print(M, K, N, ms1, FLOPS1, FLOPS1/312, ms2, FLOPS2, FLOPS2/312)
+    sys.exit(0)
 
     # for shape in [(128, 4096, 1000)]:
     #     M, K, N = shape
