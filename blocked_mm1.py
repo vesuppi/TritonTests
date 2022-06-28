@@ -123,7 +123,7 @@ def _kernel(
     tl.store(c_block_ptrs, c)
 
 
-def blocked_mm(a, b):
+def blocked_mm(a, b, num_warps=4, num_stages=4):
     outer_m_dim, outer_k_dim, BLOCK_M, BLOCK_K = a.shape
     outer_k_dim, outer_n_dim, BLOCK_K, BLOCK_N = b.shape
 
@@ -135,7 +135,7 @@ def blocked_mm(a, b):
         (outer_m_dim, outer_n_dim, BLOCK_M, BLOCK_N), device=a.device, dtype=a.dtype
     )
     grid = (outer_m_dim, outer_n_dim)
-    _kernel[grid](a, b, c, M, N, K, outer_k_dim, outer_n_dim, BLOCK_M, BLOCK_N, BLOCK_K)
+    _kernel[grid](a, b, c, M, N, K, outer_k_dim, outer_n_dim, BLOCK_M, BLOCK_N, BLOCK_K, num_warps=num_warps, num_stages=num_stages)
     return c
 
 
