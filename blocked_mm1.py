@@ -1,3 +1,4 @@
+import sys
 import torch
 import triton
 import triton.language as tl
@@ -6,6 +7,9 @@ from triton.ops.matmul import matmul as triton_matmul
 
 
 torch.backends.cuda.matmul.allow_tf32 = True
+
+print_naive_PTX = False
+print_block_PTX = False
 
 #@torch.jit.script
 def ceil_div(x: int, y: int):
@@ -45,8 +49,15 @@ def naive_mm(a, b, BLOCK_M, BLOCK_K, BLOCK_N, num_warps=4, num_stages=3):
     M, K = a.shape
     K, N = b.shape
     c = torch.empty([M, N], device=a.device, dtype=a.dtype)
+    
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
-    _kernel_naive_mm[grid](a, b, c, M, N, K, BLOCK_M, BLOCK_K, BLOCK_N, num_stages=num_stages, num_warps=num_warps)
+    binary = _kernel_naive_mm[grid](a, b, c, M, N, K, BLOCK_M, BLOCK_K, BLOCK_N, num_stages=num_stages, num_warps=num_warps)
+    global print_naive_PTX
+    if print_naive_PTX:
+        print('info: naive PTX')
+        print(binary.asm['ptx'])
+        print_naive_PTX = False
+        sys.stdout.flush()
     return c
 
 
@@ -118,29 +129,16 @@ def _kernel(
     BLOCK_K: tl.constexpr,
 ):
     # Compute the outer_m, outer_n
-    outer_m = tl.program_id(0)
-    outer_n = tl.program_id(1)
+    mid = tl.program_id(0)
+    nid = tl.program_id(1)
 
-    a_block_offset = outer_m * num_blocks_in_K * BLOCK_M * BLOCK_K
+    a_block_ptrs = a_ptr + mid * num_blocks_in_K * BLOCK_M * BLOCK_K + \
+        tl.arange(0, BLOCK_M)[:, None] * BLOCK_K + tl.arange(0, BLOCK_K)[None, :]
 
-    x1_ptr = tl.arange(0, BLOCK_M)
-    y1_ptr = tl.arange(0, BLOCK_K)
-    a_block_offsets = a_block_offset + x1_ptr[:, None] * BLOCK_K + y1_ptr[None, :]
-    #a_block_offsets1 = tl.max_contiguous(tl.multiple_of(a_block_offsets, BLOCK_M*BLOCK_K), BLOCK_M*BLOCK_K)
-    a_block_ptrs = a_ptr + a_block_offsets
-
-
-    b_start_addr = outer_n * BLOCK_K * BLOCK_N
-    #b_start_addr = tl.multiple_of(b_start_addr, BLOCK_N * BLOCK_K)
-    x2_ptr = tl.arange(0, BLOCK_K)
-    y2_ptr = tl.arange(0, BLOCK_N)
-    b_block_offsets = b_start_addr + x2_ptr[:, None] * BLOCK_N + y2_ptr[None, :]
-    #b_block_offsets1 = tl.max_contiguous(tl.multiple_of(b_block_offsets, BLOCK_N*BLOCK_K), BLOCK_N*BLOCK_K)
-    b_block_ptrs = b_ptr + b_block_offsets
-
+    b_block_ptrs = b_ptr + nid * BLOCK_K * BLOCK_N + \
+        tl.arange(0, BLOCK_K)[:, None] * BLOCK_N + tl.arange(0, BLOCK_N)[None, :]
 
     c = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
-
     for _ in range(num_blocks_in_K):
         a = tl.load(a_block_ptrs)
         b = tl.load(b_block_ptrs)
@@ -150,10 +148,8 @@ def _kernel(
 
     c = c.to(tl.float16)
 
-    c_start_addr = c_ptr + (outer_m * num_blocks_in_N + outer_n) * BLOCK_M * BLOCK_N
-    x3_ptr = tl.arange(0, BLOCK_M)
-    y3_ptr = tl.arange(0, BLOCK_N)
-    c_block_ptrs = c_start_addr + x3_ptr[:, None] * BLOCK_N + y3_ptr[None, :]
+    c_block_ptrs = c_ptr + (mid * num_blocks_in_N + nid) * BLOCK_M * BLOCK_N + \
+        tl.arange(0, BLOCK_M)[:, None] * BLOCK_N + tl.arange(0, BLOCK_N)[None, :]
     tl.store(c_block_ptrs, c)
 
 
@@ -169,7 +165,13 @@ def blocked_mm(a, b, num_warps=4, num_stages=3):
         (outer_m_dim, outer_n_dim, BLOCK_M, BLOCK_N), device=a.device, dtype=a.dtype
     )
     grid = (outer_m_dim, outer_n_dim)
-    _kernel[grid](a, b, c, M, N, K, outer_k_dim, outer_n_dim, BLOCK_M, BLOCK_N, BLOCK_K, num_warps=num_warps, num_stages=num_stages)
+    binary = _kernel[grid](a, b, c, M, N, K, outer_k_dim, outer_n_dim, BLOCK_M, BLOCK_N, BLOCK_K, num_warps=num_warps, num_stages=num_stages)
+    global print_block_PTX
+    if print_block_PTX:
+        print('info: blocked PTX')
+        print(binary.asm['ptx'])
+        print_block_PTX = False
+        sys.stdout.flush()
     return c
 
 
@@ -192,7 +194,8 @@ def run_triton_block_mm(a, b, M, K, N, BLOCK_M, BLOCK_K, BLOCK_N):
     assert torch.allclose(ref_c, res_c, rtol=0.05, atol=0.1)
 
     times = []
-    for num_stages in [1,2,3,4,5,6]:
+    #for num_stages in [1,2,3,4,5,6]:
+    for num_stages in [1,2,3,4,5]:
         for num_warps in [1,2,4,8]:
             ms, _, _ = triton.testing.do_bench(lambda: blocked_mm(blocked_a, blocked_b, num_warps, num_stages))
             times.append((ms, num_stages, num_warps))
@@ -267,28 +270,44 @@ def check_triton_mm():
     for dtype in [torch.float16, torch.float32]:
         for M in [512, 1024, 64, 128, 256]:
             for N in [512, 1024, 64, 128, 256]:
-                for K in [1024, 512, 64, 128, 256]:
+                #for K in [1024, 512, 64, 128, 256]:
+                for K in [512, 1024, 64, 128, 256]:
+                    print(f'shape: {M} x {K} x {N}')
                     a = torch.randn((M, K), device="cuda", dtype=dtype)
                     b = torch.randn((K, N), device="cuda", dtype=dtype)
 
-                    ms1 = run_normal_triton(a, b, M, K, N)
+                    a_1 = torch.randn((M-1, K-1), device="cuda", dtype=dtype)
+                    b_1 = torch.randn((K-1, N-1), device="cuda", dtype=dtype)
 
+                    
+                    ms1 = run_normal_triton(a_1, b_1, M, K, N)
+                    print(f'info: normal triton: {ms1}')
+                    
+                    ms1 = run_torch(a_1, b_1, M, K, N)
+                    print(f'info: normal torch: {ms1}')
+
+                    ms1 = run_torch(a, b, M, K, N)
+                    print(f'info: normal torch (good shape): {ms1}')
+                    
+                    #continue
                     triton_times2 = []
                     triton_times3 = []
 
                     for BLOCK_M in [32, 64, 128]:
                         for BLOCK_K in [32, 64, 128]:
                             for BLOCK_N in [32, 64, 128]:
-                                print(f'info: BM: {BLOCK_M}, BK: {BLOCK_K}, BN: {BLOCK_N}')
+                                #print(f'info: BM: {BLOCK_M}, BK: {BLOCK_K}, BN: {BLOCK_N}')
                                 if BLOCK_M > M or BLOCK_K > K or BLOCK_N > N:
                                     continue
                                 ms2 = torch.inf
                                 try:
                                     ms2 = run_triton_block_mm(a, b, M, K, N, BLOCK_M, BLOCK_K, BLOCK_N)
-                                except:
+                                except Exception as e:
+                                    print(e)
                                     pass
                                 ms3 = torch.inf
                                 try:    
+                                    pass
                                     ms3 = run_triton_naive_mm(a, b, M, K, N, BLOCK_M, BLOCK_K, BLOCK_N)
                                 except:
                                     pass
@@ -297,6 +316,7 @@ def check_triton_mm():
                                 
                                 triton_times2.append((ms2, (BLOCK_M, BLOCK_K, BLOCK_N)))
                                 triton_times3.append((ms3, (BLOCK_M, BLOCK_K, BLOCK_N)))
+                                #sys.exit(1)
 
                     triton_times2.sort(key=lambda x: x[0])
                     triton_times3.sort(key=lambda x: x[0])
@@ -310,6 +330,7 @@ def check_triton_mm():
                         ms, blocks = triton_times3[i]
                         print(f'{ms:.4f}; {blocks}', end='; ')
                     print()
+                    #sys.exit(1)
 
 
 if __name__ == "__main__":
