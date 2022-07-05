@@ -1,4 +1,5 @@
 
+from cv2 import warpPerspective
 import torch
 import triton 
 import triton.language as tl
@@ -128,9 +129,7 @@ def _kernel_mm_mask_dense_block(a_mask, a_data, b_mask, b_data, c_mask, c_data,
             b = tl.load(b_ptrs + b_block_size * k * nBN)
             c += tl.dot(a, b)
 
-            # if (m == 0) & (n == 0):
-            #     tl.store(buf+i, k)
-            #     i += 1
+    
 
     c = c.to(tl.float16)
 
@@ -173,13 +172,28 @@ def test2():
     print(c_ref)
   
     c = mm_mask_dense_block(a, b)
-    print(torch.allclose(c_ref, from_block_format(c[1])))
+    print('verify passes:', torch.allclose(c_ref, from_block_format(c[1])))
+
+    BMs = [16, 32, 64]
+    BKs = [16, 32, 64]
+    BNs = [16, 32, 64]
+    stages = [1,2,3,4,5]
+    warps = [1,2,4,8]
+
+    TEST_RUN = True
+
+    if TEST_RUN:
+        BMs, BKs, BNs = [32], [32], [32]
+        stages, warps = [3], [4]
 
     times = []
-    for num_stages in [1,2,3,4,5]:
-        for num_warps in [1,2,4,8]:
-            ms, _, _ = triton.testing.do_bench(lambda: mm_mask_dense_block(a, b, num_warps, num_stages))
-            times.append((ms, num_stages, num_warps))
+    for BM in BMs:
+        for BK in BKs:
+            for BN in BMs:
+                for num_stages in stages:
+                    for num_warps in warps:
+                        ms, _, _ = triton.testing.do_bench(lambda: mm_mask_dense_block(a, b, num_warps, num_stages))
+                        times.append((ms, BM, BK, BN, num_stages, num_warps))
     times.sort(key=lambda x: x[0])
     print(f'blocksparse mm: {times[0][0]:.4f}')
 
