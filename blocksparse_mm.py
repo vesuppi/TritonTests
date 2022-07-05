@@ -119,15 +119,13 @@ def _kernel_mm_mask_dense_block(a_mask, a_data, b_mask, b_data, c_mask, c_data,
 
     i = 0
     c = tl.zeros((BM, BN), dtype=tl.float32)
-    a_mask_ptr = a_mask + m*nBK
     for k in range(nBK):
-        a_has_block = tl.load(a_mask_ptr)
-        a_mask_ptr += 1
-        #b_has_block = tl.load(b_mask + k*nBN + n)
-        #if a_has_block:
-        a = tl.load(a_ptrs)
-        b = tl.load(b_ptrs)
-        c += tl.dot(a, b)
+        a_has_block = tl.load(a_mask + m*nBK + k)
+        b_has_block = tl.load(b_mask + k*nBN + n)
+        if a_has_block & b_has_block:
+            a = tl.load(a_ptrs)
+            b = tl.load(b_ptrs)
+            c += tl.dot(a, b)
 
         a_ptrs += a_block_size
         b_ptrs += b_block_size * nBN
@@ -249,7 +247,7 @@ def benchmark_run():
                 if (BM == 128 and BK == 128) or (BM == 128 and BN == 128) or (BN == 128 and BK == 128):
                     continue
 
-                a = gen_random_matrix_dense_blocks(M, K, BM, BK, density=1)
+                a = gen_random_matrix_dense_blocks(M, K, BM, BK, density=0.5)
                 b = gen_random_matrix_dense_blocks(K, N, BK, BN, density=1)
                 a_ref = from_block_format(a[1])
                 b_ref = from_block_format(b[1])

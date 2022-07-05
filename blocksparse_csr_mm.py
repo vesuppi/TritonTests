@@ -159,26 +159,25 @@ def _kernel_mcsr_mm(a_rowptrs, a_cols, a_vals, b_vals, c_vals,
     b_ptrs = b_vals + b_block_size * n + \
         tl.arange(0, BK)[:, None] * BN + tl.arange(0, BN)[None, :]
 
-    k_start = tl.load(a_rowptrs)
-    k_end = tl.load(a_rowptrs+1)
+    k_start = tl.load(a_rowptrs+m)
+    k_end = tl.load(a_rowptrs+m+1)
     c = tl.zeros((BM, BN), dtype=tl.float32)
 
-    for k in range(nBK):
-        a = tl.load(a_ptrs)
-        b = tl.load(b_ptrs)
-        c += tl.dot(a, b)
-
-        a_ptrs += a_block_size
-        b_ptrs += b_block_size * nBN
-
-    # for kp in range(k_start, k_end):
-    #     k = tl.load(a_cols+kp)
-    #     a = tl.load(a_ptrs+a_block_size*k)
-    #     b = tl.load(b_ptrs+b_block_size * nBN*k)
+    # for k in range(nBK):
+    #     a = tl.load(a_ptrs)
+    #     b = tl.load(b_ptrs)
     #     c += tl.dot(a, b)
 
-    #     # a_ptrs += a_block_size
-    #     # b_ptrs += b_block_size * nBN
+    #     a_ptrs += a_block_size
+    #     b_ptrs += b_block_size * nBN
+
+    
+    for kp in range(k_start, k_end):
+        k = tl.load(a_cols+kp)
+        a = tl.load(a_ptrs+a_block_size*k)
+        b = tl.load(b_ptrs+b_block_size * nBN*k)
+        c += tl.dot(a, b)
+
 
 
     c = c.to(tl.float16)
@@ -188,14 +187,13 @@ def _kernel_mcsr_mm(a_rowptrs, a_cols, a_vals, b_vals, c_vals,
     tl.store(c_ptrs, c)
 
 
-def mcsr_mm(a: MCSR, b: MCSR, num_warps=4, num_stages=3):
+def mcsr_mm(a: MCSR, b: MCSR, c, num_warps=4, num_stages=3):
     nBM, nBK, BM, BK = a.vals.shape
     nBK, nBN, BK, BN = b.vals.shape
     # TODO: this does not work when M does not divide BM
     # Or maybe it works because C will also need to be padded
     M = nBM * BM 
     N = nBN * BN
-    c = gen_empty_matrix_dense_blocks(M, N, BM, BN)
 
     grid = (nBM, nBN)
     #print(grid)
@@ -217,25 +215,26 @@ def verify_run():
     BN = BM
     a = gen_random_mcsr_matrix(M, K, BM, BK, density=1)
     b = gen_random_mcsr_matrix(K, N, BK, BN, density=1)
+    c = gen_empty_matrix_dense_blocks(M, N, BM, BN)
     a_ref = from_block_format(a.vals)
     b_ref = from_block_format(b.vals)
     c_ref = torch.mm(a_ref, b_ref)
-    c = mcsr_mm(a, b)
+    c = mcsr_mm(a, b, c)
     print('verify passes:', torch.allclose(c_ref, from_block_format(c[1])))
 
 
 def benchmark_run():
-    M = 2048
-    K = M
+    M = 1024
+    K = 2048
     N = M
     
-    BMs = [16, 32, 64]
-    BKs = [16, 32, 64]
-    BNs = [16, 32, 64]
+    BMs = [64, 128]
+    BKs = [32, 64, 128]
+    BNs = [32, 64, 128]
     stages = [1,2,3,4,5]
     warps = [1,2,4,8]
 
-    TEST_RUN = True
+    TEST_RUN = False
 
     if TEST_RUN:
         BMs, BKs, BNs = [32], [16], [32]
@@ -245,20 +244,24 @@ def benchmark_run():
     for BM in BMs:
         for BK in BKs:
             for BN in BNs:
-                a = gen_random_mcsr_matrix(M, K, BM, BK, density=1)
+                if (BM == 128 and BK == 128) or (BM == 128 and BN == 128) or (BN == 128 and BK == 128):
+                    continue
+                a = gen_random_mcsr_matrix(M, K, BM, BK, density=0.2)
                 b = gen_random_mcsr_matrix(K, N, BK, BN, density=1)
+                c = gen_empty_matrix_dense_blocks(M, N, BM, BN)
                 a_ref = from_block_format(a.vals)
                 b_ref = from_block_format(b.vals)
-                c_ref = torch.mm(a_ref, b_ref)
-                ms, _, _ = triton.testing.do_bench(lambda: torch.mm(a_ref, b_ref))
+                c_ref = torch.empty(M, N, dtype=torch.float16, device='cuda')
+                ms, _, _ = triton.testing.do_bench(lambda: torch.mm(a_ref, b_ref, out=c_ref))
                 print(f'torch mm: {ms:.4f}')
                 
                 for num_stages in stages:
                     for num_warps in warps:
-                        ms, _, _ = triton.testing.do_bench(lambda: mcsr_mm(a, b, num_warps, num_stages))
+                        ms, _, _ = triton.testing.do_bench(lambda: mcsr_mm(a, b, c, num_warps, num_stages))
                         times.append((ms, BM, BK, BN, num_stages, num_warps))
+                print('verify passes:', torch.allclose(c_ref, from_block_format(c[1])))
                 times.sort(key=lambda x: x[0])
-                print(f'blocksparse mm: {times[0][0]:.4f}')
+                print(f'blocksparse mm: {times[0][0]:.4f} ({BM} x {BK} x {BN})')
 
     
 

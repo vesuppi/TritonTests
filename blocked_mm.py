@@ -275,7 +275,7 @@ def check_triton_mm():
             for N in [512, 1024, 64, 128, 256]:
                 for K in [1024, 512, 64, 128, 256]:
                 #for K in [512, 1024, 64, 128, 256]:
-                    print(f'shape: {M} x {K} x {N}')
+                    #print(f'info: shape: {M} x {K} x {N}')
                     a = torch.randn((M, K), device="cuda", dtype=dtype)
                     b = torch.randn((K, N), device="cuda", dtype=dtype)
 
@@ -283,7 +283,7 @@ def check_triton_mm():
                     #b_1 = torch.randn((K-1, N-1), device="cuda", dtype=dtype)
 
                     ms1 = run_torch(a, b, M, K, N)
-                    print(f'info: torch mm: {ms1}')
+                    #print(f'info: torch mm: {ms1}')
                     
                     #continue
                     triton_times2 = []
@@ -312,7 +312,7 @@ def check_triton_mm():
                                 except:
                                     pass
 
-                                print(f'info: naive mm: {ms3}, block mm: {ms2}') 
+                                #print(f'info: naive mm: {ms3}, block mm: {ms2}') 
                                 
                                 triton_times2.append((ms2, (BLOCK_M, BLOCK_K, BLOCK_N)))
                                 triton_times3.append((ms3, (BLOCK_M, BLOCK_K, BLOCK_N)))
@@ -323,13 +323,14 @@ def check_triton_mm():
                     
                     print(f'{M} x {K} x {N}', end='; ')
                     print(f'{ms1:.4f}', end='; ')
-                    for i in range(5):
+                    for i in range(1):
                         ms, blocks = triton_times2[i]
                         print(f'{ms:.4f}; {blocks}', end='; ')
 
                         ms, blocks = triton_times3[i]
                         print(f'{ms:.4f}; {blocks}', end='; ')
                     print()
+                    sys.stdout.flush()
                     #sys.exit(1)
 
 
