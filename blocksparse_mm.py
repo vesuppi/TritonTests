@@ -37,6 +37,15 @@ def gen_random_matrix_dense_blocks(M, N, BM, BN, density=0.5, dtype=torch.float1
 
     return (mask, data)
 
+
+def gen_empty_matrix_dense_blocks(M, N, BM, BN, density=0.5, dtype=torch.float16, device='cuda'):
+    m = cdiv(M, BM)
+    n = cdiv(N, BN)
+    mask = torch.ones([m, n], dtype=torch.int, device=device)
+    data = torch.empty([m, n, BM, BN], dtype=dtype, device=device)
+    return (mask, data)
+
+
 def from_block_format(a):
     # TODO - Implement/check for padding
     outer_m_dim, outer_n_dim, BM, BN = a.shape
@@ -119,9 +128,9 @@ def _kernel_mm_mask_dense_block(a_mask, a_data, b_mask, b_data, c_mask, c_data,
             b = tl.load(b_ptrs + b_block_size * k * nBN)
             c += tl.dot(a, b)
 
-            if (m == 0) & (n == 0):
-                tl.store(buf+i, k)
-                i += 1
+            # if (m == 0) & (n == 0):
+            #     tl.store(buf+i, k)
+            #     i += 1
 
     c = c.to(tl.float16)
 
@@ -130,30 +139,31 @@ def _kernel_mm_mask_dense_block(a_mask, a_data, b_mask, b_data, c_mask, c_data,
     tl.store(c_ptrs, c)
 
 
-def mm_mask_dense_block(a, b):
+def mm_mask_dense_block(a, b, num_warps=4, num_stages=3):
     nBM, nBK, BM, BK = a[1].shape
     nBK, nBN, BK, BN = b[1].shape
     # TODO: this does not work when M does not divide BM
     # Or maybe it works because C will also need to be padded
     M = nBM * BM 
     N = nBN * BN
-    c = gen_random_matrix_dense_blocks(M, N, BM, BN)
+    c = gen_empty_matrix_dense_blocks(M, N, BM, BN)
 
     grid = (nBM, nBN)
-    print(grid)
+    #print(grid)
     buf = torch.zeros(64, device='cuda')
     _kernel_mm_mask_dense_block[grid](a[0], a[1], b[0], b[1], c[0], c[1],
-                                    BM, BK, BN, nBM, nBK, nBN, buf
+                                    BM, BK, BN, nBM, nBK, nBN, buf,
+                                    num_warps=num_warps, num_stages=num_stages
                                     )
     return c
 
 
 def test2():
-    M = 16
+    M = 1024
     N = M
     K = M
-    BM = 16
-    BK = BM
+    BM = 64
+    BK = 32
     BN = BM
     a = gen_random_matrix_dense_blocks(M, K, BM, BK, density=1)
     b = gen_random_matrix_dense_blocks(K, N, BK, BN, density=1)
@@ -165,5 +175,15 @@ def test2():
     c = mm_mask_dense_block(a, b)
     print(torch.allclose(c_ref, from_block_format(c[1])))
 
+    times = []
+    for num_stages in [1,2,3,4,5]:
+        for num_warps in [1,2,4,8]:
+            ms, _, _ = triton.testing.do_bench(lambda: mm_mask_dense_block(a, b, num_warps, num_stages))
+            times.append((ms, num_stages, num_warps))
+    times.sort(key=lambda x: x[0])
+    print(f'blocksparse mm: {times[0][0]:.4f}')
+
+    ms, _, _ = triton.testing.do_bench(lambda: torch.mm(a_ref, b_ref))
+    print(f'torch mm: {ms:.4f}')
 
 test2()
