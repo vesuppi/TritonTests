@@ -192,6 +192,8 @@ def test2():
     for BM in BMs:
         for BK in BKs:
             for BN in BNs:
+
+
                 for num_stages in stages:
                     for num_warps in warps:
                         ms, _, _ = triton.testing.do_bench(lambda: mm_mask_dense_block(a, b, num_warps, num_stages))
@@ -202,4 +204,69 @@ def test2():
     ms, _, _ = triton.testing.do_bench(lambda: torch.mm(a_ref, b_ref))
     print(f'torch mm: {ms:.4f}')
 
-test2()
+
+
+
+
+def verify_run():
+    M = 32
+    K = M
+    N = M
+
+    BM = 16
+    BK = BM
+    BN = BM
+    a = gen_random_matrix_dense_blocks(M, K, BM, BK, density=1)
+    b = gen_random_matrix_dense_blocks(K, N, BK, BN, density=1)
+    a_ref = from_block_format(a[1])
+    b_ref = from_block_format(b[1])
+    c_ref = torch.mm(a_ref, b_ref)
+    c = mm_mask_dense_block(a, b)
+    print('verify passes:', torch.allclose(c_ref, from_block_format(c[1])))
+
+
+def benchmark_run():
+    M = 1024
+    K = 2048
+    N = 2048
+    
+    BMs = [64, 128]
+    BKs = [32, 64, 128]
+    BNs = [32, 64, 128]
+    stages = [1,2,3,4,5]
+    warps = [1,2,4,8]
+
+    TEST_RUN = False
+
+    if TEST_RUN:
+        BMs, BKs, BNs = [32], [16], [32]
+        stages, warps = [1,2,3,4,5], [1,2,4]
+
+    times = []
+    for BM in BMs:
+        for BK in BKs:
+            for BN in BNs:
+                if (BM == 128 and BK == 128) or (BM == 128 and BN == 128) or (BN == 128 and BK == 128):
+                    continue
+
+                a = gen_random_matrix_dense_blocks(M, K, BM, BK, density=1)
+                b = gen_random_matrix_dense_blocks(K, N, BK, BN, density=1)
+                a_ref = from_block_format(a[1])
+                b_ref = from_block_format(b[1])
+                c_ref = torch.mm(a_ref, b_ref)
+                ms, _, _ = triton.testing.do_bench(lambda: torch.mm(a_ref, b_ref))
+                print(f'torch mm: {ms:.4f}')
+                c = mm_mask_dense_block(a, b)
+                print('verify passes:', torch.allclose(c_ref, from_block_format(c[1])))
+
+                for num_stages in stages:
+                    for num_warps in warps:
+                        ms, _, _ = triton.testing.do_bench(lambda: mm_mask_dense_block(a, b, num_warps, num_stages))
+                        times.append((ms, BM, BK, BN, num_stages, num_warps))
+                times.sort(key=lambda x: x[0])
+                print(f'blocksparse mm: {times[0][0]:.4f} ({BM} x {BK} x {BN})')
+
+    
+
+#verify_run()
+benchmark_run()

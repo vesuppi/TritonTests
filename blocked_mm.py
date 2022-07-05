@@ -8,6 +8,8 @@ from triton.ops.matmul import matmul as triton_matmul
 
 torch.backends.cuda.matmul.allow_tf32 = True
 
+VERIFY = False
+
 print_naive_PTX = False
 print_block_PTX = False
 
@@ -161,7 +163,7 @@ def blocked_mm(a, b, num_warps=4, num_stages=3):
     N = outer_n_dim * BLOCK_N
     K = outer_k_dim * BLOCK_K
 
-    c = torch.zeros(
+    c = torch.empty(
         (outer_m_dim, outer_n_dim, BLOCK_M, BLOCK_N), device=a.device, dtype=a.dtype
     )
     grid = (outer_m_dim, outer_n_dim)
@@ -184,20 +186,20 @@ def check_block_format_utils():
 
 
 def run_triton_block_mm(a, b, M, K, N, BLOCK_M, BLOCK_K, BLOCK_N):
-    ref_c = torch.mm(a, b)
     # Triton
     blocked_a = to_block_format(a, BLOCK_M, BLOCK_K)
     blocked_b = to_block_format(b, BLOCK_K, BLOCK_N)
     blocked_c = blocked_mm(blocked_a, blocked_b)
     res_c = from_block_format(blocked_c, BLOCK_M, BLOCK_N)
-
+    
+    ref_c = torch.mm(a, b)
     assert torch.allclose(ref_c, res_c, rtol=0.05, atol=0.1)
 
     times = []
     #for num_stages in [1,2,3,4,5,6]:
     for num_stages in [1,2,3,4,5]:
         for num_warps in [1,2,4,8]:
-            ms, _, _ = triton.testing.do_bench(lambda: blocked_mm(blocked_a, blocked_b, num_warps, num_stages))
+            ms, _, _ = triton.testing.do_bench(lambda: blocked_mm(blocked_a, blocked_b, num_warps, num_stages), rep=50)
             times.append((ms, num_stages, num_warps))
     times.sort(key=lambda x: x[0])
     #print('best blocked:', times[0])
@@ -213,9 +215,10 @@ def run_triton_naive_mm(a, b, M, K, N, BLOCK_M, BLOCK_K, BLOCK_N):
     assert torch.allclose(ref_c, res_c, rtol=0.05, atol=tol)
 
     times = []
-    for num_stages in [1,2,3,4,5,6]:
+    #for num_stages in [1,2,3,4,5,6]:
+    for num_stages in [1,2,3,4,5]:
         for num_warps in [1,2,4,8]:
-            ms, _, _ = triton.testing.do_bench(lambda: naive_mm(a, b, BLOCK_M, BLOCK_K, BLOCK_N, num_warps, num_stages))
+            ms, _, _ = triton.testing.do_bench(lambda: naive_mm(a, b, BLOCK_M, BLOCK_K, BLOCK_N, num_warps, num_stages), rep=50)
             times.append((ms, num_stages, num_warps))
     times.sort(key=lambda x: x[0])
     #print('best unblocked:', times[0])
@@ -270,24 +273,17 @@ def check_triton_mm():
     for dtype in [torch.float16, torch.float32]:
         for M in [512, 1024, 64, 128, 256]:
             for N in [512, 1024, 64, 128, 256]:
-                #for K in [1024, 512, 64, 128, 256]:
-                for K in [512, 1024, 64, 128, 256]:
+                for K in [1024, 512, 64, 128, 256]:
+                #for K in [512, 1024, 64, 128, 256]:
                     print(f'shape: {M} x {K} x {N}')
                     a = torch.randn((M, K), device="cuda", dtype=dtype)
                     b = torch.randn((K, N), device="cuda", dtype=dtype)
 
-                    a_1 = torch.randn((M-1, K-1), device="cuda", dtype=dtype)
-                    b_1 = torch.randn((K-1, N-1), device="cuda", dtype=dtype)
-
-                    
-                    ms1 = run_normal_triton(a_1, b_1, M, K, N)
-                    print(f'info: normal triton: {ms1}')
-                    
-                    ms1 = run_torch(a_1, b_1, M, K, N)
-                    print(f'info: normal torch: {ms1}')
+                    #a_1 = torch.randn((M-1, K-1), device="cuda", dtype=dtype)
+                    #b_1 = torch.randn((K-1, N-1), device="cuda", dtype=dtype)
 
                     ms1 = run_torch(a, b, M, K, N)
-                    print(f'info: normal torch (good shape): {ms1}')
+                    print(f'info: torch mm: {ms1}')
                     
                     #continue
                     triton_times2 = []
@@ -298,6 +294,10 @@ def check_triton_mm():
                             for BLOCK_N in [32, 64, 128]:
                                 #print(f'info: BM: {BLOCK_M}, BK: {BLOCK_K}, BN: {BLOCK_N}')
                                 if BLOCK_M > M or BLOCK_K > K or BLOCK_N > N:
+                                    continue
+                                if (BLOCK_M == 128 and BLOCK_K == 128) or \
+                                    (BLOCK_M == 128 and BLOCK_N == 128) or \
+                                        (BLOCK_N == 128 and BLOCK_K == 128):
                                     continue
                                 ms2 = torch.inf
                                 try:
