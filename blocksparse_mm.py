@@ -124,12 +124,13 @@ def _kernel_mm_mask_dense_block(a_mask, a_data, b_mask, b_data, c_mask, c_data,
         a_has_block = tl.load(a_mask + m*nBK + k)
         b_has_block = tl.load(b_mask + k*nBN + n)
         if a_has_block & b_has_block:
-            # Load the (m,k) tile from A and (k,n) tile from B
-            a = tl.load(a_ptrs + a_block_size * k)
-            b = tl.load(b_ptrs + b_block_size * k * nBN)
+            a = tl.load(a_ptrs)
+            b = tl.load(b_ptrs)
             c += tl.dot(a, b)
 
-    
+        a_ptrs += a_block_size
+        b_ptrs += b_block_size * nBN
+
 
     c = c.to(tl.float16)
 
@@ -184,7 +185,7 @@ def test2():
 
     if TEST_RUN:
         BMs, BKs, BNs = [32], [32], [32]
-        stages, warps = [3], [4]
+        stages, warps = [1,2,3,4,5], [1,2,4]
 
     times = []
     for BM in BMs:
