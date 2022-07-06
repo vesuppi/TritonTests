@@ -236,7 +236,7 @@ def run_normal_triton(a, b, M, K, N):
     ms, _, _ = triton.testing.do_bench(lambda: triton_matmul(a, b))
     return ms
 
-def check_triton_mm():
+def run_regular_shapes():
     torch.manual_seed(0)
     M = 64
     K = 128
@@ -273,15 +273,17 @@ def check_triton_mm():
     for dtype in [torch.float16, torch.float32]:
         for M in [512, 1024, 64, 128, 256]:
             for N in [512, 1024, 64, 128, 256]:
-                for K in [1024, 512, 64, 128, 256]:
-                #for K in [512, 1024, 64, 128, 256]:
-                    #print(f'info: shape: {M} x {K} x {N}')
+                #for K in [1024, 512, 64, 128, 256]:
+                for K in [512, 1024, 64, 128, 256]:
+                    # print(f'info: shape: {M} x {K} x {N}')
                     a = torch.randn((M, K), device="cuda", dtype=dtype)
                     b = torch.randn((K, N), device="cuda", dtype=dtype)
 
                     #a_1 = torch.randn((M-1, K-1), device="cuda", dtype=dtype)
                     #b_1 = torch.randn((K-1, N-1), device="cuda", dtype=dtype)
 
+
+                    ms0 = run_normal_triton(a, b, M, K, N)
                     ms1 = run_torch(a, b, M, K, N)
                     #print(f'info: torch mm: {ms1}')
                     
@@ -289,16 +291,13 @@ def check_triton_mm():
                     triton_times2 = []
                     triton_times3 = []
 
-                    for BLOCK_M in [32, 64, 128]:
+                    for BLOCK_M in [256, 32, 64, 128]:
                         for BLOCK_K in [32, 64, 128]:
                             for BLOCK_N in [32, 64, 128]:
                                 #print(f'info: BM: {BLOCK_M}, BK: {BLOCK_K}, BN: {BLOCK_N}')
                                 if BLOCK_M > M or BLOCK_K > K or BLOCK_N > N:
                                     continue
-                                if (BLOCK_M == 128 and BLOCK_K == 128) or \
-                                    (BLOCK_M == 128 and BLOCK_N == 128) or \
-                                        (BLOCK_N == 128 and BLOCK_K == 128):
-                                    continue
+                                
                                 ms2 = torch.inf
                                 try:
                                     ms2 = run_triton_block_mm(a, b, M, K, N, BLOCK_M, BLOCK_K, BLOCK_N)
@@ -322,7 +321,7 @@ def check_triton_mm():
                     triton_times3.sort(key=lambda x: x[0])
                     
                     print(f'{M} x {K} x {N}', end='; ')
-                    print(f'{ms1:.4f}', end='; ')
+                    print(f'{ms0:.4f}; {ms1:.4f}', end='; ')
                     for i in range(1):
                         ms, blocks = triton_times2[i]
                         print(f'{ms:.4f}; {blocks}', end='; ')
@@ -334,9 +333,72 @@ def check_triton_mm():
                     #sys.exit(1)
 
 
+def run_real_shapes():
+    for dtype in [torch.float16, torch.float32]:
+        for shape in [(128, 9216, 4096), (128, 4096, 4096), (2048, 768, 768), (2048, 768, 3072)]:
+            M, K, N = shape
+            print(f'info: shape: {M} x {K} x {N}')
+            a = torch.randn((M, K), device="cuda", dtype=dtype)
+            b = torch.randn((K, N), device="cuda", dtype=dtype)
+
+            #a_1 = torch.randn((M-1, K-1), device="cuda", dtype=dtype)
+            #b_1 = torch.randn((K-1, N-1), device="cuda", dtype=dtype)
+
+
+            ms0 = run_normal_triton(a, b, M, K, N)
+            ms1 = run_torch(a, b, M, K, N)
+            print(f'info: torch mm: {ms1}')
+        
+            triton_times2 = []
+            triton_times3 = []
+
+            for BLOCK_M in [32, 64, 128, 256]:
+                for BLOCK_K in [32, 64, 128]:
+                    for BLOCK_N in [32, 64, 128]:
+                        #print(f'info: BM: {BLOCK_M}, BK: {BLOCK_K}, BN: {BLOCK_N}')
+                        if BLOCK_M > M or BLOCK_K > K or BLOCK_N > N:
+                            continue
+                        
+                        ms2 = torch.inf
+                        try:
+                            ms2 = run_triton_block_mm(a, b, M, K, N, BLOCK_M, BLOCK_K, BLOCK_N)
+                        except Exception as e:
+                            print(e)
+                            pass
+                        ms3 = torch.inf
+                        try:    
+                            pass
+                            ms3 = run_triton_naive_mm(a, b, M, K, N, BLOCK_M, BLOCK_K, BLOCK_N)
+                        except:
+                            pass
+
+                        print(f'info: naive mm: {ms3}, block mm: {ms2}') 
+                        sys.stdout.flush()
+                        
+                        triton_times2.append((ms2, (BLOCK_M, BLOCK_K, BLOCK_N)))
+                        triton_times3.append((ms3, (BLOCK_M, BLOCK_K, BLOCK_N)))
+                        #sys.exit(1)
+
+            triton_times2.sort(key=lambda x: x[0])
+            triton_times3.sort(key=lambda x: x[0])
+            
+            print(f'{M} x {K} x {N}', end='; ')
+            print(f'{ms0:.4f}; {ms1:.4f}', end='; ')
+            for i in range(1):
+                ms, blocks = triton_times2[i]
+                print(f'{ms:.4f}; {blocks}', end='; ')
+
+                ms, blocks = triton_times3[i]
+                print(f'{ms:.4f}; {blocks}', end='; ')
+            print()
+            sys.stdout.flush()
+            #sys.exit(1)
+
+
+
 if __name__ == "__main__":
     check_block_format_utils()
-    check_triton_mm()
+    run_real_shapes()
 
 
 

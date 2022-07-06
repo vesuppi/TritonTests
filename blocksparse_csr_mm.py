@@ -80,6 +80,61 @@ def gen_random_mcsr_matrix(M, N, BM, BN, density=1, dtype=torch.float16, device=
     return BCSR(rowptrs, cols, data)
 
 
+def gen_lower_triangular_mcsr_matrix(M, N, BM, BN, dtype=torch.float16, device='cuda'):
+    m = cdiv(M, BM)
+    n = cdiv(N, BN)
+    mask = torch.ones([m, n], dtype=torch.int, device=device)
+    data = torch.randn([m, n, BM, BN], dtype=dtype, device=device)
+    for i in range(m):
+        for j in range(n):
+            if j > i:
+                data[i,j] = torch.zeros(BM, BN)
+                mask[i,j] = 0
+
+    nnz = torch.sum(mask)
+    rowptrs = torch.zeros(m+1, dtype=torch.int, device=device)
+    rowptrs[0] = 0
+    cols = torch.zeros(nnz, dtype=torch.int, device=device)
+    
+    nnz = 0
+    for i in range(m):
+        for j in range(n):
+            if mask[i,j] != 0:
+                cols[nnz] = j
+                nnz += 1
+        rowptrs[i+1] = nnz
+    assert nnz == torch.sum(mask)
+    return BCSR(rowptrs, cols, data)
+
+
+def gen_lower_half_mcsr_matrix(M, N, BM, BN, dtype=torch.float16, device='cuda'):
+    m = cdiv(M, BM)
+    n = cdiv(N, BN)
+    mask = torch.ones([m, n], dtype=torch.int, device=device)
+    data = torch.randn([m, n, BM, BN], dtype=dtype, device=device)
+    for i in range(m):
+        for j in range(n):
+            if i > m // 2:
+                data[i,j] = torch.zeros(BM, BN)
+                mask[i,j] = 0
+
+    nnz = torch.sum(mask)
+    rowptrs = torch.zeros(m+1, dtype=torch.int, device=device)
+    rowptrs[0] = 0
+    cols = torch.zeros(nnz, dtype=torch.int, device=device)
+    
+    nnz = 0
+    for i in range(m):
+        for j in range(n):
+            if mask[i,j] != 0:
+                cols[nnz] = j
+                nnz += 1
+        rowptrs[i+1] = nnz
+    assert nnz == torch.sum(mask)
+    print(mask)
+    return BCSR(rowptrs, cols, data)
+
+
 def gen_empty_matrix_dense_blocks(M, N, BM, BN, density=0.5, dtype=torch.float16, device='cuda'):
     m = cdiv(M, BM)
     n = cdiv(N, BN)
@@ -148,7 +203,6 @@ def test1():
 def _kernel_mcsr_mm(a_rowptrs, a_cols, a_vals, b_vals, c_vals, 
                                 BM: tl.constexpr, BK: tl.constexpr, BN: tl.constexpr, 
                                 nBM: tl.constexpr, nBK: tl.constexpr, nBN: tl.constexpr,
-                                buf
                                 ):
     m = tl.program_id(0)
     n = tl.program_id(1)
@@ -159,6 +213,7 @@ def _kernel_mcsr_mm(a_rowptrs, a_cols, a_vals, b_vals, c_vals,
     b_ptrs = b_vals + b_block_size * n + \
         tl.arange(0, BK)[:, None] * BN + tl.arange(0, BN)[None, :]
 
+    # a_rowptrs_m = a_rowptrs + m
     k_start = tl.load(a_rowptrs+m)
     k_end = tl.load(a_rowptrs+m+1)
     c = tl.zeros((BM, BN), dtype=tl.float32)
@@ -177,9 +232,7 @@ def _kernel_mcsr_mm(a_rowptrs, a_cols, a_vals, b_vals, c_vals,
         a = tl.load(a_ptrs+a_block_size*k)
         b = tl.load(b_ptrs+b_block_size * nBN*k)
         c += tl.dot(a, b)
-
-
-
+        
     c = c.to(tl.float16)
 
     c_ptrs = c_vals + (m * nBN + n) * BM * BN + \
@@ -197,11 +250,12 @@ def mcsr_mm(a: MCSR, b: MCSR, c, num_warps=4, num_stages=3):
 
     grid = (nBM, nBN)
     #print(grid)
-    buf = torch.zeros(64, device='cuda')
-    _kernel_mcsr_mm[grid](a.rowptrs, a.cols, a.vals, b.vals, c[1],
-                                    BM, BK, BN, nBM, nBK, nBN, buf,
+    
+    binary = _kernel_mcsr_mm[grid](a.rowptrs, a.cols, a.vals, b.vals, c[1],
+                                    BM, BK, BN, nBM, nBK, nBN, 
                                     num_warps=num_warps, num_stages=num_stages
                                     )
+    #print(binary.asm['ptx'])
     return c
 
 
@@ -213,7 +267,7 @@ def verify_run():
     BM = 16
     BK = BM
     BN = BM
-    a = gen_random_mcsr_matrix(M, K, BM, BK, density=1)
+    a = gen_lower_triangular_mcsr_matrix(M, K, BM, BK)
     b = gen_random_mcsr_matrix(K, N, BK, BN, density=1)
     c = gen_empty_matrix_dense_blocks(M, N, BM, BN)
     a_ref = from_block_format(a.vals)
@@ -224,29 +278,31 @@ def verify_run():
 
 
 def benchmark_run():
-    M = 1024
-    K = 2048
+    M = 2048
+    K = 1024
     N = M
     
-    BMs = [64, 128]
+    BMs = [256, 64, 128]
     BKs = [32, 64, 128]
     BNs = [32, 64, 128]
-    stages = [1,2,3,4,5]
-    warps = [1,2,4,8]
+    #stages = [1,2,3,4,5]
+    #warps = [1,2,4,8]
+    stages = [2,3,4,5]
+    warps = [1,2,4]
 
     TEST_RUN = False
 
     if TEST_RUN:
-        BMs, BKs, BNs = [32], [16], [32]
+        BMs, BKs, BNs = [64], [64], [64]
         stages, warps = [1,2,3,4,5], [1,2,4]
 
     times = []
     for BM in BMs:
         for BK in BKs:
             for BN in BNs:
-                if (BM == 128 and BK == 128) or (BM == 128 and BN == 128) or (BN == 128 and BK == 128):
-                    continue
-                a = gen_random_mcsr_matrix(M, K, BM, BK, density=0.2)
+                a = gen_random_mcsr_matrix(M, K, BM, BK, density=0.5)
+                #a = gen_lower_triangular_mcsr_matrix(M, K, BM, BK)
+                #a = gen_lower_half_mcsr_matrix(M, K, BM, BK)
                 b = gen_random_mcsr_matrix(K, N, BK, BN, density=1)
                 c = gen_empty_matrix_dense_blocks(M, N, BM, BN)
                 a_ref = from_block_format(a.vals)
@@ -255,15 +311,21 @@ def benchmark_run():
                 ms, _, _ = triton.testing.do_bench(lambda: torch.mm(a_ref, b_ref, out=c_ref))
                 print(f'torch mm: {ms:.4f}')
                 
-                for num_stages in stages:
-                    for num_warps in warps:
-                        ms, _, _ = triton.testing.do_bench(lambda: mcsr_mm(a, b, c, num_warps, num_stages))
-                        times.append((ms, BM, BK, BN, num_stages, num_warps))
+                ms = torch.inf
+                try:
+                    for num_stages in stages:
+                        for num_warps in warps:
+                            ms, _, _ = triton.testing.do_bench(lambda: mcsr_mm(a, b, c, num_warps, num_stages), rep=50)
+                            times.append((ms, BM, BK, BN, num_stages, num_warps))
+                except Exception as e:
+                    print('run triton failed')
+                    continue
                 print('verify passes:', torch.allclose(c_ref, from_block_format(c[1])))
                 times.sort(key=lambda x: x[0])
+                print(times[0])
                 print(f'blocksparse mm: {times[0][0]:.4f} ({BM} x {BK} x {BN})')
 
     
 
-verify_run()
+
 benchmark_run()

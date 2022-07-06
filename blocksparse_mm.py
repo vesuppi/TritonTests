@@ -41,7 +41,7 @@ def gen_random_matrix_dense_blocks(M, N, BM, BN, density=0.5, dtype=torch.float1
 def gen_empty_matrix_dense_blocks(M, N, BM, BN, density=0.5, dtype=torch.float16, device='cuda'):
     m = cdiv(M, BM)
     n = cdiv(N, BN)
-    mask = torch.ones([m, n], dtype=torch.int, device=device)
+    mask = torch.empty([m, n], dtype=torch.int, device=device)
     data = torch.empty([m, n, BM, BN], dtype=dtype, device=device)
     return (mask, data)
 
@@ -106,7 +106,6 @@ def test1():
 def _kernel_mm_mask_dense_block(a_mask, a_data, b_mask, b_data, c_mask, c_data, 
                                 BM: tl.constexpr, BK: tl.constexpr, BN: tl.constexpr, 
                                 nBM: tl.constexpr, nBK: tl.constexpr, nBN: tl.constexpr,
-                                buf
                                 ):
     m = tl.program_id(0)
     n = tl.program_id(1)
@@ -120,12 +119,12 @@ def _kernel_mm_mask_dense_block(a_mask, a_data, b_mask, b_data, c_mask, c_data,
     i = 0
     c = tl.zeros((BM, BN), dtype=tl.float32)
     for k in range(nBK):
-        a_has_block = tl.load(a_mask + m*nBK + k)
-        b_has_block = tl.load(b_mask + k*nBN + n)
-        if a_has_block & b_has_block:
-            a = tl.load(a_ptrs)
-            b = tl.load(b_ptrs)
-            c += tl.dot(a, b)
+        # a_has_block = tl.load(a_mask + m*nBK + k)
+        # b_has_block = tl.load(b_mask + k*nBN + n)
+        # if a_has_block & b_has_block:
+        a = tl.load(a_ptrs)
+        b = tl.load(b_ptrs)
+        c += tl.dot(a, b)
 
         a_ptrs += a_block_size
         b_ptrs += b_block_size * nBN
@@ -149,9 +148,9 @@ def mm_mask_dense_block(a, b, num_warps=4, num_stages=3):
 
     grid = (nBM, nBN)
     #print(grid)
-    buf = torch.zeros(64, device='cuda')
+    #buf = torch.zeros(64, device='cuda')
     _kernel_mm_mask_dense_block[grid](a[0], a[1], b[0], b[1], c[0], c[1],
-                                    BM, BK, BN, nBM, nBK, nBN, buf,
+                                    BM, BK, BN, nBM, nBK, nBN, 
                                     num_warps=num_warps, num_stages=num_stages
                                     )
     return c
@@ -204,8 +203,6 @@ def test2():
 
 
 
-
-
 def verify_run():
     M = 32
     K = M
@@ -226,7 +223,7 @@ def verify_run():
 def benchmark_run():
     M = 1024
     K = 2048
-    N = 2048
+    N = M
     
     BMs = [64, 128]
     BKs = [32, 64, 128]
@@ -247,7 +244,7 @@ def benchmark_run():
                 if (BM == 128 and BK == 128) or (BM == 128 and BN == 128) or (BN == 128 and BK == 128):
                     continue
 
-                a = gen_random_matrix_dense_blocks(M, K, BM, BK, density=0.5)
+                a = gen_random_matrix_dense_blocks(M, K, BM, BK, density=1)
                 b = gen_random_matrix_dense_blocks(K, N, BK, BN, density=1)
                 a_ref = from_block_format(a[1])
                 b_ref = from_block_format(b[1])
