@@ -3,8 +3,9 @@ import torch
 print('imported torch')
 import triton 
 import triton.language as tl
-import utils
 from utils import *
+from torchinductor.triton_ops.batched_matmul import bmm_out
+import argparse
 
 
 @triton.jit
@@ -14,7 +15,7 @@ def _kernel_mcsr_bmm(a_rowptrs, a_cols, a_vals, b_vals, c_vals,
                                 ):
     m = tl.program_id(0)
     n = tl.program_id(1)
-    b = tl.program_id(2)
+    bid = tl.program_id(2)
 
     M: tl.constexpr = BM * nBM
     K: tl.constexpr = BK * nBK
@@ -27,35 +28,25 @@ def _kernel_mcsr_bmm(a_rowptrs, a_cols, a_vals, b_vals, c_vals,
     b_ptrs = b_vals + b_block_size * n + \
         tl.arange(0, BK)[:, None] * BN + tl.arange(0, BN)[None, :]
 
-    a_ptrs += b * M * K
-    b_ptrs += b * K * N
+    a_ptrs += bid * M * K
+    b_ptrs += bid * K * N
 
-    # a_rowptrs_m = a_rowptrs + m
     k_start = tl.load(a_rowptrs+m)
     k_end = tl.load(a_rowptrs+m+1)
     c = tl.zeros((BM, BN), dtype=tl.float32)
-
-    # for k in range(nBK):
-    #     a = tl.load(a_ptrs)
-    #     b = tl.load(b_ptrs)
-    #     c += tl.dot(a, b)
-
-    #     a_ptrs += a_block_size
-    #     b_ptrs += b_block_size * nBN
-
     
     for kp in range(k_start, k_end):
         k = tl.load(a_cols+kp)
         a = tl.load(a_ptrs+a_block_size*k)
         b = tl.load(b_ptrs+b_block_size * nBN*k)
         c += tl.dot(a, b)
-        
+
     c = c.to(tl.float16)
 
     c_ptrs = c_vals + (m * nBN + n) * BM * BN + \
         tl.arange(0, BM)[:, None] * BN + tl.arange(0, BN)[None, :]
 
-    c_ptrs += b* M * K
+    c_ptrs += bid * M * N
     
     tl.store(c_ptrs, c)
 
@@ -115,10 +106,20 @@ def verify_run():
 
     
 def test_lower_triangular():
-    B = 10
-    M = 1024
-    K = M 
-    N = M
+
+    parser = argparse.ArgumentParser(description='Process some integers.')
+    parser.add_argument('-m', type=int)
+    parser.add_argument('-k', type=int)
+    parser.add_argument('-n', type=int)
+    parser.add_argument('-b', type=int)
+    args = parser.parse_args()
+
+    B, M, K, N = args.b, args.m, args.k, args.n
+
+    # B = 10
+    # M = 1024
+    # K = M 
+    # N = M
 
     TEST_RUN = False
     if TEST_RUN:
@@ -134,8 +135,13 @@ def test_lower_triangular():
     a = torch.tril(a)
     b = torch.randn([B, K, N], dtype=dtype, device='cuda')
     c_ref = torch.empty([B, M, N], dtype=dtype, device='cuda')
-    ms, _, _ = triton.testing.do_bench(lambda: torch.bmm(a, b, out=c_ref))
-    print(f'torch bmm: {ms:.4f}')
+    torch_ms, _, _ = triton.testing.do_bench(lambda: torch.bmm(a, b, out=c_ref))
+    print(f'info: torch bmm: {torch_ms:.4f}')
+
+    triton_c_ref = torch.empty([B, M, N], dtype=dtype, device='cuda')
+    triton_ms, _, _ = triton.testing.do_bench(lambda: bmm_out(a, b, triton_c_ref))
+    print(f'info: triton bmm: {triton_ms:.4f}')
+    print(torch.allclose(c_ref, triton_c_ref, atol=0.1, rtol=0.01))
 
     #sys.exit(1)
 
@@ -154,7 +160,7 @@ def test_lower_triangular():
         stages, warps = [2,3,4,5], [1,2,4]
 
     best_time = torch.inf
-    
+    print(f'info: shapes: {B} x {M} x {K} x {N}')
     for BM in BMs:
         for BK in BKs:
             for BN in BNs:
@@ -165,7 +171,7 @@ def test_lower_triangular():
                 a_mask_rowptrs, a_mask_cols = to_csr_ptrs(a_mask)
                 b_block, b_mask = to_block_format_with_mask_bmm_one_mask(b, BK, BN)
                 #print(a_mask_rowptrs, a_mask_cols)
-                c = gen_empty_matrix_dense_blocks(M, N, BM, BN, 1)
+                c = gen_empty_matrix_dense_blocks(M, N, BM, BN, batch_size=B)
 
                 
                 times = []
@@ -177,19 +183,20 @@ def test_lower_triangular():
                             
                             times.append((ms, BM, BK, BN, num_stages, num_warps))
                 except Exception as e:
-                    print('run triton failed')
-                    raise e
+                    print('info: run triton failed')
+                    
                     continue
                 verified = torch.allclose(c_ref, from_block_format(c[1]))
-                print('verify passes:', verified)
+                print('info: verify passes:', verified)
                 if verified:
                     times.sort(key=lambda x: x[0])
                     print(f'info: blocksparse mm: {times[0][0]:.4f} ({BM} x {BK} x {BN})')
+                    sys.stdout.flush()
                     if times[0][0] < best_time:
                         best_time = times[0][0]
 
-    print(f'blocksparse mm: {best_time:.5f}')
-
+    print(f'{B}x{M}x{K}x{N}', f'{torch_ms:.4f}', f'{triton_ms:.4f}', f'{best_time:.4f}', sep='; ')
+    sys.stdout.flush()
     
 #test_random()
 test_lower_triangular()

@@ -101,18 +101,24 @@ def to_block_format_with_mask_bmm_one_mask(a, BLOCK_M: int, BLOCK_N: int):
 
 
 def from_block_format(a):
+    if a.dim() == 2:
+        a = a[None, :, :]
     # TODO - Implement/check for padding
-    outer_m_dim, outer_n_dim, BLOCK_M, BLOCK_N = a.shape
+    B, outer_m_dim, outer_n_dim, BLOCK_M, BLOCK_N = a.shape
 
     M = outer_m_dim * BLOCK_M
     N = outer_n_dim * BLOCK_N
 
-    res = torch.zeros((M, N), dtype=a.dtype, device=a.device)
+    res = torch.zeros((B, M, N), dtype=a.dtype, device=a.device)
 
-    for outer_m in range(outer_m_dim):
-        for outer_n in range(outer_n_dim):
-            res[outer_m * BLOCK_M: outer_m * BLOCK_M + BLOCK_M, outer_n * BLOCK_N: outer_n * BLOCK_N + BLOCK_N] = a[
-                    outer_m, outer_n, 0: BLOCK_M, 0: BLOCK_N
+    for m in range(outer_m_dim):
+        for n in range(outer_n_dim):
+            res[
+                :,
+                m * BLOCK_M: (m+1) * BLOCK_M, 
+                n * BLOCK_N: (n+1) * BLOCK_N
+            ] = a[
+                    :, m, n, 0: BLOCK_M, 0: BLOCK_N
                 ]
     return res
 
@@ -235,13 +241,6 @@ def gen_empty_matrix_dense_blocks(M, N, BM, BN, batch_size=1, dtype=torch.float1
     m = cdiv(M, BM)
     n = cdiv(N, BN)
     mask = torch.ones([m, n], dtype=torch.int, device=device)
-    if batch_size == 1:                
-        data = torch.empty([m, n, BM, BN], dtype=dtype, device=device)
-        return (mask, data)
-    elif batch_size > 1:
-        data = torch.empty([batch_size, m, n, BM, BN], dtype=dtype, device=device)
-        return (mask, data)
-    else:
-        assert False
-
+    data = torch.empty([batch_size, m, n, BM, BN], dtype=dtype, device=device)
+    return (mask, data)
 
