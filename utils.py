@@ -231,10 +231,17 @@ def gen_lower_triangular_mcsr_matrix(M, N, BM, BN, dtype=torch.float16, device='
     return BCSR(rowptrs, cols, data)
 
 
-def gen_empty_matrix_dense_blocks(M, N, BM, BN, density=0.5, dtype=torch.float16, device='cuda'):
+def gen_empty_matrix_dense_blocks(M, N, BM, BN, batch_size=1, dtype=torch.float16, device='cuda'):
     m = cdiv(M, BM)
     n = cdiv(N, BN)
     mask = torch.ones([m, n], dtype=torch.int, device=device)
-    data = torch.empty([m, n, BM, BN], dtype=dtype, device=device)
-    return (mask, data)
+    if batch_size == 1:                
+        data = torch.empty([m, n, BM, BN], dtype=dtype, device=device)
+        return (mask, data)
+    elif batch_size > 1:
+        data = torch.empty([batch_size, m, n, BM, BN], dtype=dtype, device=device)
+        return (mask, data)
+    else:
+        assert False
+
 

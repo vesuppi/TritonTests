@@ -8,18 +8,27 @@ from utils import *
 
 
 @triton.jit
-def _kernel_mcsr_mm(a_rowptrs, a_cols, a_vals, b_vals, c_vals, 
+def _kernel_mcsr_bmm(a_rowptrs, a_cols, a_vals, b_vals, c_vals, 
                                 BM: tl.constexpr, BK: tl.constexpr, BN: tl.constexpr, 
                                 nBM: tl.constexpr, nBK: tl.constexpr, nBN: tl.constexpr,
                                 ):
     m = tl.program_id(0)
     n = tl.program_id(1)
+    b = tl.program_id(2)
+
+    M: tl.constexpr = BM * nBM
+    K: tl.constexpr = BK * nBK
+    N: tl.constexpr = BN * nBN
+
     a_block_size = BM * BK
     b_block_size = BK * BN
     a_ptrs = a_vals + a_block_size * nBK * m + \
         tl.arange(0, BM)[:, None] * BK + tl.arange(0, BK)[None, :]
     b_ptrs = b_vals + b_block_size * n + \
         tl.arange(0, BK)[:, None] * BN + tl.arange(0, BN)[None, :]
+
+    a_ptrs += b * M * K
+    b_ptrs += b * K * N
 
     # a_rowptrs_m = a_rowptrs + m
     k_start = tl.load(a_rowptrs+m)
@@ -45,19 +54,22 @@ def _kernel_mcsr_mm(a_rowptrs, a_cols, a_vals, b_vals, c_vals,
 
     c_ptrs = c_vals + (m * nBN + n) * BM * BN + \
         tl.arange(0, BM)[:, None] * BN + tl.arange(0, BN)[None, :]
+
+    c_ptrs += b* M * K
+    
     tl.store(c_ptrs, c)
 
 
-def mcsr_mm_inner(a_rowptrs, a_cols, a_vals, b_vals, c, num_warps=4, num_stages=3):
-    nBM, nBK, BM, BK = a_vals.shape
-    nBK, nBN, BK, BN = b_vals.shape
+def mcsr_bmm_inner(a_rowptrs, a_cols, a_vals, b_vals, c, num_warps=4, num_stages=3):
+    B, nBM, nBK, BM, BK = a_vals.shape
+    B, nBK, nBN, BK, BN = b_vals.shape
     # TODO: this does not work when M does not divide BM
     # Or maybe it works because C will also need to be padded
     M = nBM * BM 
     N = nBN * BN
 
-    grid = (nBM, nBN)
-    binary = _kernel_mcsr_mm[grid](a_rowptrs, a_cols, a_vals, b_vals, c,
+    grid = (nBM, nBN, B)
+    binary = _kernel_mcsr_bmm[grid](a_rowptrs, a_cols, a_vals, b_vals, c,
                                     BM, BK, BN, nBM, nBK, nBN, 
                                     num_warps=num_warps, num_stages=num_stages
                                     )
@@ -65,17 +77,17 @@ def mcsr_mm_inner(a_rowptrs, a_cols, a_vals, b_vals, c, num_warps=4, num_stages=
     return c
 
 def mcsr_mm(a: MCSR, b: MCSR, c, num_warps=4, num_stages=3):
-    nBM, nBK, BM, BK = a.vals.shape
-    nBK, nBN, BK, BN = b.vals.shape
+    B, nBM, nBK, BM, BK = a.vals.shape
+    B, nBK, nBN, BK, BN = b.vals.shape
     # TODO: this does not work when M does not divide BM
     # Or maybe it works because C will also need to be padded
     M = nBM * BM 
     N = nBN * BN
 
-    grid = (nBM, nBN)
+    grid = (nBM, nBN, B)
     #print(grid)
     
-    binary = _kernel_mcsr_mm[grid](a.rowptrs, a.cols, a.vals, b.vals, c[1],
+    binary = _kernel_mcsr_bmm[grid](a.rowptrs, a.cols, a.vals, b.vals, c[1],
                                     BM, BK, BN, nBM, nBK, nBN, 
                                     num_warps=num_warps, num_stages=num_stages
                                     )
@@ -108,7 +120,7 @@ def test_lower_triangular():
     K = M 
     N = M
 
-    TEST_RUN = True
+    TEST_RUN = False
     if TEST_RUN:
         B = 2
         M = 8
@@ -150,13 +162,10 @@ def test_lower_triangular():
                     continue
                 
                 a_block, a_mask = to_block_format_with_mask_bmm_one_mask(a, BM, BK)
-                print(a_block)
-                print(a_mask)
-                sys.exit(1)
                 a_mask_rowptrs, a_mask_cols = to_csr_ptrs(a_mask)
-                b_block = to_block_format(b, BK, BN)
+                b_block, b_mask = to_block_format_with_mask_bmm_one_mask(b, BK, BN)
                 #print(a_mask_rowptrs, a_mask_cols)
-                c = gen_empty_matrix_dense_blocks(M, N, BM, BN)
+                c = gen_empty_matrix_dense_blocks(M, N, BM, BN, 1)
 
                 
                 times = []
@@ -164,11 +173,12 @@ def test_lower_triangular():
                 try:
                     for num_stages in stages:
                         for num_warps in warps:
-                            ms, _, _ = triton.testing.do_bench(lambda: mcsr_mm_inner(a_mask_rowptrs, a_mask_cols, a_block, b_block, c[1], num_warps, num_stages), rep=50)
+                            ms, _, _ = triton.testing.do_bench(lambda: mcsr_bmm_inner(a_mask_rowptrs, a_mask_cols, a_block, b_block, c[1], num_warps, num_stages), rep=50)
                             
                             times.append((ms, BM, BK, BN, num_stages, num_warps))
                 except Exception as e:
                     print('run triton failed')
+                    raise e
                     continue
                 verified = torch.allclose(c_ref, from_block_format(c[1]))
                 print('verify passes:', verified)
