@@ -4,7 +4,7 @@ import triton
 import triton.language as tl
 import triton.testing
 from triton.ops.matmul import matmul as triton_matmul
-
+from utils import *
 
 torch.backends.cuda.matmul.allow_tf32 = True
 
@@ -13,9 +13,6 @@ VERIFY = False
 print_naive_PTX = False
 print_block_PTX = False
 
-#@torch.jit.script
-def ceil_div(x: int, y: int):
-    return (x + y - 1) // y
 
 
 @triton.jit
@@ -62,58 +59,6 @@ def naive_mm(a, b, BLOCK_M, BLOCK_K, BLOCK_N, num_warps=4, num_stages=3):
         sys.stdout.flush()
     return c
 
-
-#@torch.jit.script
-def to_block_format(a, BLOCK_M: int, BLOCK_N: int):
-    M, N = a.shape
-    outer_m_dim = ceil_div(M, BLOCK_M)
-    outer_n_dim = ceil_div(N, BLOCK_N)
-    inner_m_dim = BLOCK_M
-    inner_n_dim = BLOCK_N
-
-    res = torch.zeros(
-        (outer_m_dim, outer_n_dim, inner_m_dim, inner_n_dim),
-        dtype=a.dtype,
-        device=a.device,
-    )
-
-    # TODO - Implement/check for padding
-    for outer_m in range(outer_m_dim):
-        for outer_n in range(outer_n_dim):
-            res[outer_m, outer_n, 0: inner_m_dim, 0: inner_n_dim] = a[
-                outer_m * BLOCK_M: outer_m * BLOCK_M + inner_m_dim, outer_n * BLOCK_N: outer_n * BLOCK_N + inner_n_dim
-            ]
-            # for inner_m in range(inner_m_dim):
-            #     # res[outer_m, outer_n, inner_m, 0: inner_n_dim] = a[
-            #     #         outer_m * BLOCK_M + inner_m, outer_n * BLOCK_N: outer_n * BLOCK_N + inner_n_dim
-            #     #     ]
-            #     for inner_n in range(inner_n_dim):
-            #         res[outer_m, outer_n, inner_m, inner_n] = a[
-            #             outer_m * BLOCK_M + inner_m, outer_n * BLOCK_N + inner_n
-            #         ]
-    return res
-
-
-def from_block_format(a, BLOCK_M, BLOCK_N):
-    # TODO - Implement/check for padding
-    outer_m_dim, outer_n_dim, inner_m_dim, inner_n_dim = a.shape
-
-    M = outer_m_dim * BLOCK_M
-    N = outer_n_dim * BLOCK_N
-
-    res = torch.zeros((M, N), dtype=a.dtype, device=a.device)
-
-    for outer_m in range(outer_m_dim):
-        for outer_n in range(outer_n_dim):
-            res[outer_m * BLOCK_M: outer_m * BLOCK_M + inner_m_dim, outer_n * BLOCK_N: outer_n * BLOCK_N + inner_n_dim] = a[
-                    outer_m, outer_n, 0: inner_m_dim, 0: inner_n_dim
-                ]
-            # for inner_m in range(inner_m_dim):
-            #     for inner_n in range(inner_n_dim):
-            #         res[outer_m * BLOCK_M + inner_m, outer_n * BLOCK_N + inner_n] = a[
-            #             outer_m, outer_n, inner_m, inner_n
-            #         ]
-    return res
 
 
 @triton.jit
