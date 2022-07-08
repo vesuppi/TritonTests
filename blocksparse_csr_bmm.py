@@ -1,4 +1,5 @@
 import sys
+from pygame import K_s
 import torch
 print('imported torch')
 import triton 
@@ -35,11 +36,15 @@ def _kernel_mcsr_bmm(a_rowptrs, a_cols, a_vals, b_vals, c_vals,
     k_end = tl.load(a_rowptrs+m+1)
     c = tl.zeros((BM, BN), dtype=tl.float32)
     
+    a_cols_ptr = a_cols + k_start
+
     for kp in range(k_start, k_end):
-        k = tl.load(a_cols+kp)
+        k = tl.load(a_cols_ptr)
         a = tl.load(a_ptrs+a_block_size*k)
         b = tl.load(b_ptrs+b_block_size * nBN*k)
         c += tl.dot(a, b)
+
+        a_cols_ptr += 1
 
     c = c.to(tl.float16)
 
