@@ -151,6 +151,36 @@ def to_csr_ptrs(a, device='cuda'):
     return (rowptrs, cols)
 
 
+def to_contiguous_nz_format_simple(a, device='cuda'):
+    m, n = a.shape
+
+    cols = torch.empty(2*m, dtype=torch.int, device=device)
+    for i in range(m):
+        start = -1
+        end = -1
+        for j in range(n):
+            if j == 0:
+                if a[i,j] != 0:
+                    start = j
+                    continue
+
+            if j == n-1:
+                if a[i,j] != 0:
+                    end = j + 1
+                    continue
+
+            if a[i,j] != 0:
+                if a[i,j-1] == 0:
+                    start = j
+            elif a[i,j] == 0:
+                if a[i,j-1] != 0:
+                    end = j
+            
+        cols[2*i] = start
+        cols[2*i+1] = end
+    return cols
+
+
 def gen_random_matrix(M, N, BM, BN, density=0.5, dtype=torch.float16, device='cuda'):
     m = cdiv(M, BM)
     n = cdiv(N, BN)

@@ -1,5 +1,4 @@
 import sys
-from pygame import K_s
 import torch
 print('imported torch')
 import triton 
@@ -10,7 +9,7 @@ import argparse
 
 
 @triton.jit
-def _kernel_mcsr_bmm(a_rowptrs, a_cols, a_vals, b_vals, c_vals, 
+def _kernel_mcsr_bmm(a_cols, a_vals, b_vals, c_vals, 
                                 BM: tl.constexpr, BK: tl.constexpr, BN: tl.constexpr, 
                                 nBM: tl.constexpr, nBK: tl.constexpr, nBN: tl.constexpr,
                                 ):
@@ -32,17 +31,13 @@ def _kernel_mcsr_bmm(a_rowptrs, a_cols, a_vals, b_vals, c_vals,
     a_ptrs += bid * M * K
     b_ptrs += bid * K * N
 
-    k_start = tl.load(a_rowptrs+m)
-    k_end = tl.load(a_rowptrs+m+1)
-    c = tl.zeros((BM, BN), dtype=tl.float32)
-    
-    a_cols_ptr = a_cols + k_start
-    k0 = tl.load(a_cols_ptr)
-    a_ptrs = a_ptrs+a_block_size*k0
-    b_ptrs = b_ptrs+b_block_size * nBN*k0
+    k_start = tl.load(a_cols + 2*m)
+    k_end = tl.load(a_cols + 2*m+1)
+    a_ptrs = a_ptrs+a_block_size * k_start
+    b_ptrs = b_ptrs+b_block_size * nBN * k_start
 
-    for kp in range(k_start, k_end):
-        #k = tl.load(a_cols_ptr)
+    c = tl.zeros((BM, BN), dtype=tl.float32)
+    for _ in range(k_start, k_end):
         a = tl.load(a_ptrs)
         b = tl.load(b_ptrs)
         c += tl.dot(a, b)
@@ -59,7 +54,7 @@ def _kernel_mcsr_bmm(a_rowptrs, a_cols, a_vals, b_vals, c_vals,
     tl.store(c_ptrs, c)
 
 
-def mcsr_bmm_inner(a_rowptrs, a_cols, a_vals, b_vals, c, num_warps=4, num_stages=3):
+def mcsr_bmm_inner(a_cols, a_vals, b_vals, c, num_warps=4, num_stages=3):
     B, nBM, nBK, BM, BK = a_vals.shape
     B, nBK, nBN, BK, BN = b_vals.shape
     # TODO: this does not work when M does not divide BM
@@ -68,7 +63,7 @@ def mcsr_bmm_inner(a_rowptrs, a_cols, a_vals, b_vals, c, num_warps=4, num_stages
     N = nBN * BN
 
     grid = (nBM, nBN, B)
-    binary = _kernel_mcsr_bmm[grid](a_rowptrs, a_cols, a_vals, b_vals, c,
+    binary = _kernel_mcsr_bmm[grid](a_cols, a_vals, b_vals, c,
                                     BM, BK, BN, nBM, nBK, nBN, 
                                     num_warps=num_warps, num_stages=num_stages
                                     )
@@ -113,17 +108,7 @@ def verify_run():
 
 
     
-def test_lower_triangular():
-
-    parser = argparse.ArgumentParser(description='Process some integers.')
-    parser.add_argument('-m', type=int)
-    parser.add_argument('-k', type=int)
-    parser.add_argument('-n', type=int)
-    parser.add_argument('-b', type=int)
-    args = parser.parse_args()
-
-    B, M, K, N = args.b, args.m, args.k, args.n
-
+def test_lower_triangular(B, M, K, N):
     # B = 10
     # M = 1024
     # K = M 
@@ -140,7 +125,7 @@ def test_lower_triangular():
     a = torch.randn([B, M, K], dtype=dtype, device='cuda')
     #a[M//2:, :] = 0
     #a[:, K//2:] = 0
-    a = torch.tril(a)
+    #a = torch.tril(a)
     b = torch.randn([B, K, N], dtype=dtype, device='cuda')
     c_ref = torch.empty([B, M, N], dtype=dtype, device='cuda')
     torch_ms, _, _ = triton.testing.do_bench(lambda: torch.bmm(a, b, out=c_ref))
@@ -153,8 +138,10 @@ def test_lower_triangular():
 
     #sys.exit(1)
 
-    BMs = [32, 64, 128, 256]
-    BKs = [32, 64, 128, 256]
+    #BMs = [32, 64, 128, 256]
+    #BKs = [32, 64, 128, 256]
+    BMs = [32, 64, 128]
+    BKs = [32, 64, 128]
     BNs = [32, 64, 128]
     #stages = [1,2,3,4,5]
     #warps = [1,2,4,8]
@@ -172,28 +159,37 @@ def test_lower_triangular():
     for BM in BMs:
         for BK in BKs:
             for BN in BNs:
-                if BM * K != BK * M:
+                if BM > M or BK > K or BN > N:
                     continue
                 
+                if BM * K != BK * M:
+                    continue
+
+                
+                print(f'info: blocks: {BM} x {BK} x {BN}')
                 a_block, a_mask = to_block_format_with_mask_bmm_one_mask(a, BM, BK)
-                a_mask_rowptrs, a_mask_cols = to_csr_ptrs(a_mask)
+                a_mask_cols = to_contiguous_nz_format_simple(a_mask)
+                
+                print(a_mask_cols)
+                #sys.exit(1)
                 b_block, b_mask = to_block_format_with_mask_bmm_one_mask(b, BK, BN)
                 #print(a_mask_rowptrs, a_mask_cols)
                 c = gen_empty_matrix_dense_blocks(M, N, BM, BN, batch_size=B)
 
-                
                 times = []
                 ms = torch.inf
                 try:
                     for num_stages in stages:
                         for num_warps in warps:
-                            ms, _, _ = triton.testing.do_bench(lambda: mcsr_bmm_inner(a_mask_rowptrs, a_mask_cols, a_block, b_block, c[1], num_warps, num_stages), rep=50)
-                            
+                            if BM * BK * BN >= 128 * 128 * 32 and num_warps == 1:
+                                continue
+                            ms, _, _ = triton.testing.do_bench(lambda: mcsr_bmm_inner(a_mask_cols, a_block, b_block, c[1], num_warps, num_stages), rep=50)
+                            print(f'info: {num_stages} x {num_warps}, {ms:.4f}')
                             times.append((ms, BM, BK, BN, num_stages, num_warps))
                 except Exception as e:
-                    print('info: run triton failed')
+                    print('info: run triton failed ({BM} x {BK} x {BN})')
                     print(e)
-                    continue
+                    
                 verified = torch.allclose(c_ref, from_block_format(c[1]))
                 print('info: verify passes:', verified)
                 if verified:
@@ -207,4 +203,31 @@ def test_lower_triangular():
     sys.stdout.flush()
     
 #test_random()
-test_lower_triangular()
+
+def test_post_shapes_lower_tri():
+    shapes = [
+        (32*16, 1024, 1024, 1024//16),
+        (32*16, 1024, 1024, 4096//16),
+        (32*16, 1024, 1024, 8192//16),
+        (32*16, 2048, 2048, 1024//16),
+        (32*16, 2048, 2048, 4096//16),
+        (32*16, 2048, 2048, 8192//16),
+    ]
+    for shape in shapes:
+        B, M, K, N = shape
+        test_lower_triangular(B, M, K, N)
+
+
+parser = argparse.ArgumentParser(description='Process some integers.')
+parser.add_argument('-m', type=int, default=0)
+parser.add_argument('-k', type=int)
+parser.add_argument('-n', type=int)
+parser.add_argument('-b', type=int)
+args = parser.parse_args()
+
+B, M, K, N = args.b, args.m, args.k, args.n
+
+if M == 0:
+    test_post_shapes_lower_tri()
+else:
+    test_lower_triangular(B, M, K, N)
