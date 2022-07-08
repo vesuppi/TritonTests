@@ -113,17 +113,7 @@ def verify_run():
 
 
     
-def test_lower_triangular():
-
-    parser = argparse.ArgumentParser(description='Process some integers.')
-    parser.add_argument('-m', type=int)
-    parser.add_argument('-k', type=int)
-    parser.add_argument('-n', type=int)
-    parser.add_argument('-b', type=int)
-    args = parser.parse_args()
-
-    B, M, K, N = args.b, args.m, args.k, args.n
-
+def test_lower_triangular(B, M, K, N):
     # B = 10
     # M = 1024
     # K = M 
@@ -153,8 +143,8 @@ def test_lower_triangular():
 
     #sys.exit(1)
 
-    BMs = [32, 64, 128, 256]
-    BKs = [32, 64, 128, 256]
+    BMs = [32, 64, 128]
+    BKs = [32, 64, 128]
     BNs = [32, 64, 128]
     #stages = [1,2,3,4,5]
     #warps = [1,2,4,8]
@@ -172,6 +162,9 @@ def test_lower_triangular():
     for BM in BMs:
         for BK in BKs:
             for BN in BNs:
+                if BM > M or BK > K or BN > N:
+                    continue
+                
                 if BM * K != BK * M:
                     continue
                 
@@ -187,6 +180,8 @@ def test_lower_triangular():
                 try:
                     for num_stages in stages:
                         for num_warps in warps:
+                            if BM * BK * BN >= 128 * 128 * 32 and num_warps == 1:
+                                continue
                             ms, _, _ = triton.testing.do_bench(lambda: mcsr_bmm_inner(a_mask_rowptrs, a_mask_cols, a_block, b_block, c[1], num_warps, num_stages), rep=50)
                             
                             times.append((ms, BM, BK, BN, num_stages, num_warps))
@@ -206,5 +201,31 @@ def test_lower_triangular():
     print(f'{B}x{M}x{K}x{N}', f'{torch_ms:.4f}', f'{triton_ms:.4f}', f'{best_time:.4f}', sep='; ')
     sys.stdout.flush()
     
-#test_random()
-test_lower_triangular()
+
+def test_post_shapes_lower_tri():
+    shapes = [
+        (32*16, 1024, 1024, 1024//16),
+        (32*16, 1024, 1024, 4096//16),
+        (32*16, 1024, 1024, 8192//16),
+        (32*16, 2048, 2048, 1024//16),
+        (32*16, 2048, 2048, 4096//16),
+        (32*16, 2048, 2048, 8192//16),
+    ]
+    for shape in shapes:
+        B, M, K, N = shape
+        test_lower_triangular(B, M, K, N)
+
+
+parser = argparse.ArgumentParser(description='Process some integers.')
+parser.add_argument('-m', type=int, default=0)
+parser.add_argument('-k', type=int)
+parser.add_argument('-n', type=int)
+parser.add_argument('-b', type=int)
+args = parser.parse_args()
+
+B, M, K, N = args.b, args.m, args.k, args.n
+
+if M == 0:
+    test_post_shapes_lower_tri()
+else:
+    test_lower_triangular(B, M, K, N)
