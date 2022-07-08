@@ -37,14 +37,17 @@ def _kernel_mcsr_bmm(a_rowptrs, a_cols, a_vals, b_vals, c_vals,
     c = tl.zeros((BM, BN), dtype=tl.float32)
     
     a_cols_ptr = a_cols + k_start
+    k0 = tl.load(a_cols_ptr)
+    a_ptrs = a_ptrs+a_block_size*k0
+    b_ptrs = b_ptrs+b_block_size * nBN*k0
 
     for kp in range(k_start, k_end):
-        k = tl.load(a_cols_ptr)
-        a = tl.load(a_ptrs+a_block_size*k)
-        b = tl.load(b_ptrs+b_block_size * nBN*k)
+        #k = tl.load(a_cols_ptr)
+        a = tl.load(a_ptrs)
+        b = tl.load(b_ptrs)
         c += tl.dot(a, b)
-
-        a_cols_ptr += 1
+        a_ptrs += a_block_size
+        b_ptrs += b_block_size * nBN
 
     c = c.to(tl.float16)
 
@@ -189,7 +192,7 @@ def test_lower_triangular():
                             times.append((ms, BM, BK, BN, num_stages, num_warps))
                 except Exception as e:
                     print('info: run triton failed')
-                    
+                    print(e)
                     continue
                 verified = torch.allclose(c_ref, from_block_format(c[1]))
                 print('info: verify passes:', verified)
