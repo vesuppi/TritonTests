@@ -1,10 +1,10 @@
 import sys
-from pygame import K_s
 import torch
 print('imported torch')
 import triton 
 import triton.language as tl
 from utils import *
+from triton.ops.blocksparse import matmul as blocksparse_matmul
 from torchinductor.triton_ops.batched_matmul import bmm_out
 import argparse
 
@@ -37,17 +37,14 @@ def _kernel_mcsr_bmm(a_rowptrs, a_cols, a_vals, b_vals, c_vals,
     c = tl.zeros((BM, BN), dtype=tl.float32)
     
     a_cols_ptr = a_cols + k_start
-    k0 = tl.load(a_cols_ptr)
-    a_ptrs = a_ptrs+a_block_size*k0
-    b_ptrs = b_ptrs+b_block_size * nBN*k0
 
     for kp in range(k_start, k_end):
-        #k = tl.load(a_cols_ptr)
-        a = tl.load(a_ptrs)
-        b = tl.load(b_ptrs)
+        k = tl.load(a_cols_ptr)
+        a = tl.load(a_ptrs+a_block_size*k)
+        b = tl.load(b_ptrs+b_block_size * nBN*k)
         c += tl.dot(a, b)
-        a_ptrs += a_block_size
-        b_ptrs += b_block_size * nBN
+
+        a_cols_ptr += 1
 
     c = c.to(tl.float16)
 
@@ -130,7 +127,7 @@ def test_lower_triangular(B, M, K, N):
     a = torch.randn([B, M, K], dtype=dtype, device='cuda')
     #a[M//2:, :] = 0
     #a[:, K//2:] = 0
-    a = torch.tril(a)
+    #a = torch.tril(a)
     b = torch.randn([B, K, N], dtype=dtype, device='cuda')
     c_ref = torch.empty([B, M, N], dtype=dtype, device='cuda')
     torch_ms, _, _ = triton.testing.do_bench(lambda: torch.bmm(a, b, out=c_ref))
@@ -174,6 +171,25 @@ def test_lower_triangular(B, M, K, N):
                 #print(a_mask_rowptrs, a_mask_cols)
                 c = gen_empty_matrix_dense_blocks(M, N, BM, BN, batch_size=B)
 
+
+                B, m, k, _, _ = a_block.shape
+                a_block.reshape(B, m*k, BM, BK)
+                #a_block = a_block[None, :]
+                a_mask = a_mask[None, :]
+                b1 = b[:, None, :, :]
+                triton_spmm = blocksparse_matmul(
+                    layout=a_mask,
+                    block=a_block,
+                    mode="dsd",
+                    device="cuda",
+                    trans_a=False,
+                    trans_b=False,
+                )
+
+                c = torch.squeeze(triton_spmm(a_block, b1))
+                print(torch.allclose(c_ref, c))
+
+                sys.exit(1)
                 
                 times = []
                 ms = torch.inf
