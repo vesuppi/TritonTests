@@ -115,7 +115,6 @@ def test_lower_triangular(B, M, K, N):
     # M = 1024
     # K = M 
     # N = M
- 
 
     TEST_RUN = False
     if TEST_RUN:
@@ -125,19 +124,19 @@ def test_lower_triangular(B, M, K, N):
         N = M
 
     dtype = torch.float16
-    a = torch.randn([B, 1, M, K], dtype=dtype, device='cuda')
+    a = torch.randn([B, M, K], dtype=dtype, device='cuda')
     #a[M//2:, :] = 0
     #a[:, K//2:] = 0
-    a = torch.tril(a)
-    b = torch.randn([B, 1, K, N], dtype=dtype, device='cuda')
-    c_ref = torch.empty([1, B, M, N], dtype=dtype, device='cuda')
-    torch_ms, _, _ = triton.testing.do_bench(lambda: torch.matmul(a, b, out=c_ref))
+    #a = torch.tril(a)
+    b = torch.randn([B, K, N], dtype=dtype, device='cuda')
+    c_ref = torch.empty([B, M, N], dtype=dtype, device='cuda')
+    torch_ms, _, _ = triton.testing.do_bench(lambda: torch.bmm(a, b, out=c_ref))
     print(f'info: torch bmm: {torch_ms:.4f}')
 
-    # triton_c_ref = torch.empty([1, B, M, N], dtype=dtype, device='cuda')
-    # triton_ms, _, _ = triton.testing.do_bench(lambda: bmm_out(a, b, triton_c_ref))
-    # print(f'info: triton bmm: {triton_ms:.4f}')
-    # print(torch.allclose(c_ref, triton_c_ref, atol=0.1, rtol=0.01))
+    triton_c_ref = torch.empty([B, M, N], dtype=dtype, device='cuda')
+    triton_ms, _, _ = triton.testing.do_bench(lambda: bmm_out(a, b, triton_c_ref))
+    print(f'info: triton bmm: {triton_ms:.4f}')
+    print(torch.allclose(c_ref, triton_c_ref, atol=0.1, rtol=0.01))
 
     #sys.exit(1)
 
@@ -157,8 +156,6 @@ def test_lower_triangular(B, M, K, N):
 
     best_time = torch.inf
     print(f'info: shapes: {B} x {M} x {K} x {N}')
-
-    
     for BM in BMs:
         for BK in BKs:
             for BN in BNs:
@@ -168,39 +165,29 @@ def test_lower_triangular(B, M, K, N):
                 if BM * K != BK * M:
                     continue
                 
-                print(a.shape)
                 a_block, a_mask = to_block_format_with_mask_bmm_one_mask(a, BM, BK)
-                print(a_block.shape)
-                # a_mask_rowptrs, a_mask_cols = to_csr_ptrs(a_mask)
-                # b_block, b_mask = to_block_format_with_mask_bmm_one_mask(b, BK, BN)
+                a_mask_rowptrs, a_mask_cols = to_csr_ptrs(a_mask)
+                b_block, b_mask = to_block_format_with_mask_bmm_one_mask(b, BK, BN)
                 #print(a_mask_rowptrs, a_mask_cols)
-                # c = gen_empty_matrix_dense_blocks(M, N, BM, BN, batch_size=B)
+                c = gen_empty_matrix_dense_blocks(M, N, BM, BN, batch_size=B)
 
 
-                # B, m, k, _, _ = a_block.shape
-                # a_block.reshape(B, m*k, BM, BK)
+                B, m, k, _, _ = a_block.shape
+                a_block.reshape(B, m*k, BM, BK)
                 #a_block = a_block[None, :]
-                # a_mask = a_mask[None, :]
-                # b1 = b[:, None, :, :]
-                print(a_mask)
+                a_mask = a_mask[None, :]
+                b1 = b[:, None, :, :]
                 triton_spmm = blocksparse_matmul(
                     layout=a_mask,
-                    block=BM,
+                    block=a_block,
                     mode="dsd",
                     device="cuda",
                     trans_a=False,
                     trans_b=False,
                 )
 
-                c = torch.squeeze(triton_spmm(a_block, b))
-                c_ref = torch.squeeze(c_ref)
-
-                print(c[2], c_ref[2])
-                # import pdb; pdb.set_trace()
-
-                # c = torch.squeeze(triton_spmm(a_block, b1))
+                c = torch.squeeze(triton_spmm(a_block, b1))
                 print(torch.allclose(c_ref, c))
-                #import pdb; pdb.set_trace()
 
                 sys.exit(1)
                 
