@@ -38,6 +38,8 @@ def _kernel_mcsr_bmm(a_rowptrs, a_cols, a_vals, b_vals, c_vals,
     
     a_cols_ptr = a_cols + k_start
 
+    a_cols_ptr = tl.multiple_of(a_cols_ptr, 8)
+
     for kp in range(k_start, k_end):
         k = tl.load(a_cols_ptr)
         a = tl.load(a_ptrs+a_block_size*k)
@@ -171,25 +173,24 @@ def test_lower_triangular(B, M, K, N):
                 #print(a_mask_rowptrs, a_mask_cols)
                 c = gen_empty_matrix_dense_blocks(M, N, BM, BN, batch_size=B)
 
+                # B, m, k, _, _ = a_block.shape
+                # a_block.reshape(B, m*k, BM, BK)
+                # #a_block = a_block[None, :]
+                # a_mask = a_mask[None, :]
+                # b1 = b[:, None, :, :]
+                # triton_spmm = blocksparse_matmul(
+                #     layout=a_mask,
+                #     block=a_block,
+                #     mode="dsd",
+                #     device="cuda",
+                #     trans_a=False,
+                #     trans_b=False,
+                # )
 
-                B, m, k, _, _ = a_block.shape
-                a_block.reshape(B, m*k, BM, BK)
-                #a_block = a_block[None, :]
-                a_mask = a_mask[None, :]
-                b1 = b[:, None, :, :]
-                triton_spmm = blocksparse_matmul(
-                    layout=a_mask,
-                    block=a_block,
-                    mode="dsd",
-                    device="cuda",
-                    trans_a=False,
-                    trans_b=False,
-                )
+                # c = torch.squeeze(triton_spmm(a_block, b1))
+                # print(torch.allclose(c_ref, c))
 
-                c = torch.squeeze(triton_spmm(a_block, b1))
-                print(torch.allclose(c_ref, c))
-
-                sys.exit(1)
+                # sys.exit(1)
                 
                 times = []
                 ms = torch.inf

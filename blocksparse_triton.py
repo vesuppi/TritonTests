@@ -169,7 +169,7 @@ def test_lower_triangular(B, M, K, N):
                     continue
                 
                 print(a.shape)
-                a_block, a_mask = to_block_format_with_mask_bmm_one_mask(a, BM, BK)
+                a_block, a_mask = to_triton_blocksparse_format(a, BM, BK)
                 print(a_block.shape)
                 # a_mask_rowptrs, a_mask_cols = to_csr_ptrs(a_mask)
                 # b_block, b_mask = to_block_format_with_mask_bmm_one_mask(b, BK, BN)
