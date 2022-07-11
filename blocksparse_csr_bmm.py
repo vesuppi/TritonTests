@@ -31,11 +31,11 @@ def _kernel1(a_cols, a_vals, b_vals, c_vals,
     b_block_size = BK * BN
     a_ptrs = a_vals + a_block_size * nBK * m + \
         tl.arange(0, BM)[:, None] * BK + tl.arange(0, BK)[None, :]
-    # b_ptrs = b_vals + b_block_size * n + \
-    #     tl.arange(0, BK)[:, None] * BN + tl.arange(0, BN)[None, :]
+    b_ptrs = b_vals + b_block_size * n + \
+        tl.arange(0, BK)[:, None] * BN + tl.arange(0, BN)[None, :]
 
-    b_cols = n * BN + tl.arange(0, BN)
-    b_ptrs = b_vals + tl.arange(0, BK)[:, None] * N + b_cols[None, :]
+    # b_cols = n * BN + tl.arange(0, BN)
+    # b_ptrs = b_vals + tl.arange(0, BK)[:, None] * N + b_cols[None, :]
 
 
     a_ptrs += bid * M * K
@@ -124,7 +124,7 @@ def verify_run():
 
 
     
-def test_lower_triangular(B, M, K, N):
+def test_lower_triangular(B, M, K, N, is_tril=True):
     # B = 10
     # M = 1024
     # K = M 
@@ -141,7 +141,8 @@ def test_lower_triangular(B, M, K, N):
     a = torch.randn([B, M, K], dtype=dtype, device='cuda')
     #a[M//2:, :] = 0
     #a[:, K//2:] = 0
-    a = torch.tril(a)
+    if is_tril:
+        a = torch.tril(a)
     b = torch.randn([B, K, N], dtype=dtype, device='cuda')
     c_ref = torch.empty([B, M, N], dtype=dtype, device='cuda')
     torch_ms, _, _ = triton.testing.do_bench(lambda: torch.bmm(a, b, out=c_ref))
@@ -169,14 +170,14 @@ def test_lower_triangular(B, M, K, N):
         
         #print(a_mask_cols)
         
-        #b_block, b_mask = to_block_format_with_mask_bmm_one_mask(b, BK, BN)
+        b_block, b_mask = to_block_format_with_mask_bmm_one_mask(b, BK, BN)
         #print(a_mask_rowptrs, a_mask_cols)
         c = gen_empty_matrix_dense_blocks(M, N, BM, BN, batch_size=B)
 
         ms = torch.inf
         try:
             ms, _, _ = triton.testing.do_bench(lambda: 
-                bmm1_inner(B, M, K, N, BM, BK, BN, a_mask_cols, a_block, b, c[1], num_warps, num_stages), 
+                bmm1_inner(B, M, K, N, BM, BK, BN, a_mask_cols, a_block, b_block, c[1], num_warps, num_stages), 
             rep=50)
             print(f'info: {num_stages} x {num_warps}, {ms:.4f}')
             
@@ -314,6 +315,19 @@ def test_single_batch():
         test_lower_triangular(B, M, K, N)
 
 
+def test_torchbench_shapes(is_tril=True):
+    shapes = [
+        (192, 128, 64, 128),
+        (192, 128, 128, 64),
+        (12, 1024, 1024, 64),
+        (12, 1024, 64, 1024),
+        (12, 512, 64, 512),
+        (12, 512, 512, 64),
+    ]
+    for shape in shapes:
+        B, M, K, N = shape
+        test_lower_triangular(B, M, K, N, is_tril)
+
 
 
 parser = argparse.ArgumentParser(description='Process some integers.')
@@ -327,6 +341,10 @@ B, M, K, N = args.b, args.m, args.k, args.n
 
 if M == 0:
     #test_single_batch()
-    test_post_shapes_lower_tri()
+    #test_post_shapes_lower_tri()
+    print('Test dense a')
+    test_torchbench_shapes(False)
+    print('Test lower tril a')
+    test_torchbench_shapes(True)
 else:
     test_lower_triangular(B, M, K, N)
