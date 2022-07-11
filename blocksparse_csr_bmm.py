@@ -183,26 +183,26 @@ def _kernel_mcsr_bmm(a_cols, a_vals, b_vals, c_vals,
 
     #a_cols = tl.multiple_of(a_cols, 8)
 
-    # k_start = tl.load(a_cols + 2*m)
-    # k_end = tl.load(a_cols + 2*m+1)
-    # a_ptrs = a_ptrs+a_block_size * k_start
-    # b_ptrs = b_ptrs+b_block_size * nBN * k_start
+    k_start = tl.load(a_cols + 2*m)
+    k_end = tl.load(a_cols + 2*m+1)
+    a_ptrs = a_ptrs+a_block_size * k_start
+    b_ptrs = b_ptrs+b_block_size * nBN * k_start
 
     c = tl.zeros((BM, BN), dtype=tl.float32)
 
-    for k in range(nBK):
-        a = tl.load(a_ptrs)
-        b = tl.load(b_ptrs)
-        c += tl.dot(a, b)
-        a_ptrs += a_block_size
-        b_ptrs += b_block_size * nBN
-
-    # for _ in range(k_start, k_end):
+    # for k in range(nBK):
     #     a = tl.load(a_ptrs)
     #     b = tl.load(b_ptrs)
     #     c += tl.dot(a, b)
     #     a_ptrs += a_block_size
     #     b_ptrs += b_block_size * nBN
+
+    for _ in range(k_start, k_end):
+        a = tl.load(a_ptrs)
+        b = tl.load(b_ptrs)
+        c += tl.dot(a, b)
+        a_ptrs += a_block_size
+        b_ptrs += b_block_size * nBN
 
     c = c.to(tl.float16)
 
@@ -299,6 +299,8 @@ def test_lower_triangular(B, M, K, N):
         BM = config.kwargs['BLOCK_M']
         BN = config.kwargs['BLOCK_N']
         BK = config.kwargs['BLOCK_K']
+        if BM > M or BK > K or BN > N:
+            continue
         num_stages = config.num_stages
         num_warps = config.num_warps
         print(f'info: blocks: {BM} x {BK} x {BN}')
@@ -418,8 +420,8 @@ def test_lower_triangular(B, M, K, N):
 
 def test_post_shapes_lower_tri():
     shapes = [
-        #(32*16, 1024, 1024, 1024//16),
-        #(32*16, 1024, 1024, 4096//16),
+        (32*16, 1024, 1024, 1024//16),
+        (32*16, 1024, 1024, 4096//16),
         (32*16, 1024, 1024, 8192//16),
         (32*16, 2048, 2048, 1024//16),
         (32*16, 2048, 2048, 4096//16),
@@ -442,8 +444,8 @@ def test_single_batch():
     
     shapes = [
         (1, 3072, 3072, 3072),
-        # (16, 3072, 3072, 3072),
-        # (64, 3072, 3072, 3072),
+        (16, 3072, 3072, 3072),
+        (64, 3072, 3072, 3072),
         (1, 4096, 4096, 4096),
         (1, 8192, 8192, 8192),
     ]
@@ -464,7 +466,7 @@ args = parser.parse_args()
 B, M, K, N = args.b, args.m, args.k, args.n
 
 if M == 0:
-    test_single_batch()
-    #test_post_shapes_lower_tri()
+    #test_single_batch()
+    test_post_shapes_lower_tri()
 else:
     test_lower_triangular(B, M, K, N)
