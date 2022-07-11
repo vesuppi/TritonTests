@@ -281,14 +281,14 @@ def test_lower_triangular(B, M, K, N):
     a = torch.randn([B, M, K], dtype=dtype, device='cuda')
     #a[M//2:, :] = 0
     #a[:, K//2:] = 0
-    #a = torch.tril(a)
+    a = torch.tril(a)
     b = torch.randn([B, K, N], dtype=dtype, device='cuda')
     c_ref = torch.empty([B, M, N], dtype=dtype, device='cuda')
     torch_ms, _, _ = triton.testing.do_bench(lambda: torch.bmm(a, b, out=c_ref))
     print(f'info: torch bmm: {torch_ms:.4f}')
 
     triton_c_ref = torch.empty([B, M, N], dtype=dtype, device='cuda')
-    triton_ms = 0
+    #triton_ms = 0
     triton_ms, _, _ = triton.testing.do_bench(lambda: bmm_out(a, b, triton_c_ref))
     
     print(f'info: triton bmm: {triton_ms:.4f}')
