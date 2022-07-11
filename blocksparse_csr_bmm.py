@@ -7,6 +7,147 @@ from utils import *
 from torchinductor.triton_ops.batched_matmul import bmm_out
 import argparse
 
+basic_configs=[
+        # basic configs for compute-bound matmuls
+        triton.Config(
+            {"BLOCK_M": 128, "BLOCK_N": 256, "BLOCK_K": 32, "SPLIT_K": 1},
+            num_stages=3,
+            num_warps=8,
+        ),
+        triton.Config(
+            {"BLOCK_M": 256, "BLOCK_N": 128, "BLOCK_K": 32, "SPLIT_K": 1},
+            num_stages=3,
+            num_warps=8,
+        ),
+        triton.Config(
+            {"BLOCK_M": 256, "BLOCK_N": 64, "BLOCK_K": 32, "SPLIT_K": 1},
+            num_stages=4,
+            num_warps=4,
+        ),
+        triton.Config(
+            {"BLOCK_M": 64, "BLOCK_N": 256, "BLOCK_K": 32, "SPLIT_K": 1},
+            num_stages=4,
+            num_warps=4,
+        ),
+        triton.Config(
+            {"BLOCK_M": 128, "BLOCK_N": 128, "BLOCK_K": 32, "SPLIT_K": 1},
+            num_stages=4,
+            num_warps=4,
+        ),
+        triton.Config(
+            {"BLOCK_M": 128, "BLOCK_N": 64, "BLOCK_K": 32, "SPLIT_K": 1},
+            num_stages=4,
+            num_warps=4,
+        ),
+        triton.Config(
+            {"BLOCK_M": 64, "BLOCK_N": 128, "BLOCK_K": 32, "SPLIT_K": 1},
+            num_stages=4,
+            num_warps=4,
+        ),
+        triton.Config(
+            {"BLOCK_M": 128, "BLOCK_N": 32, "BLOCK_K": 32, "SPLIT_K": 1},
+            num_stages=4,
+            num_warps=4,
+        ),
+        triton.Config(
+            {"BLOCK_M": 64, "BLOCK_N": 32, "BLOCK_K": 32, "SPLIT_K": 1},
+            num_stages=5,
+            num_warps=2,
+        ),
+        # additional configs
+        triton.Config(
+            {"BLOCK_M": 128, "BLOCK_N": 256, "BLOCK_K": 64, "SPLIT_K": 1},
+            num_stages=3,
+            num_warps=8,
+        ),
+        triton.Config(
+            {"BLOCK_M": 256, "BLOCK_N": 128, "BLOCK_K": 64, "SPLIT_K": 1},
+            num_stages=3,
+            num_warps=8,
+        ),
+        triton.Config(
+            {"BLOCK_M": 256, "BLOCK_N": 64, "BLOCK_K": 64, "SPLIT_K": 1},
+            num_stages=4,
+            num_warps=4,
+        ),
+        triton.Config(
+            {"BLOCK_M": 64, "BLOCK_N": 256, "BLOCK_K": 64, "SPLIT_K": 1},
+            num_stages=2,
+            num_warps=4,
+        ),
+        triton.Config(
+            {"BLOCK_M": 128, "BLOCK_N": 128, "BLOCK_K": 64, "SPLIT_K": 1},
+            num_stages=2,
+            num_warps=4,
+        ),
+        # additional configs for K = 64
+        triton.Config(
+            {"BLOCK_M": 128, "BLOCK_N": 256, "BLOCK_K": 64, "SPLIT_K": 1},
+            num_stages=1,
+            num_warps=8,
+        ),
+        triton.Config(
+            {"BLOCK_M": 256, "BLOCK_N": 128, "BLOCK_K": 64, "SPLIT_K": 1},
+            num_stages=1,
+            num_warps=8,
+        ),
+        triton.Config(
+            {"BLOCK_M": 256, "BLOCK_N": 64, "BLOCK_K": 64, "SPLIT_K": 1},
+            num_stages=1,
+            num_warps=4,
+        ),
+        triton.Config(
+            {"BLOCK_M": 64, "BLOCK_N": 256, "BLOCK_K": 64, "SPLIT_K": 1},
+            num_stages=1,
+            num_warps=4,
+        ),
+        triton.Config(
+            {"BLOCK_M": 128, "BLOCK_N": 128, "BLOCK_K": 64, "SPLIT_K": 1},
+            num_stages=1,
+            num_warps=4,
+        ),
+        triton.Config(
+            {"BLOCK_M": 128, "BLOCK_N": 64, "BLOCK_K": 64, "SPLIT_K": 1},
+            num_stages=4,
+            num_warps=4,
+        ),
+        triton.Config(
+            {"BLOCK_M": 64, "BLOCK_N": 128, "BLOCK_K": 64, "SPLIT_K": 1},
+            num_stages=4,
+            num_warps=4,
+        ),
+        triton.Config(
+            {"BLOCK_M": 128, "BLOCK_N": 32, "BLOCK_K": 64, "SPLIT_K": 1},
+            num_stages=4,
+            num_warps=4,
+        ),
+        triton.Config(
+            {"BLOCK_M": 64, "BLOCK_N": 32, "BLOCK_K": 64, "SPLIT_K": 1},
+            num_stages=5,
+            num_warps=2,
+        ),
+        triton.Config(
+            {"BLOCK_M": 128, "BLOCK_N": 64, "BLOCK_K": 64, "SPLIT_K": 1},
+            num_stages=1,
+            num_warps=4,
+        ),
+        triton.Config(
+            {"BLOCK_M": 64, "BLOCK_N": 128, "BLOCK_K": 64, "SPLIT_K": 1},
+            num_stages=1,
+            num_warps=4,
+        ),
+        triton.Config(
+            {"BLOCK_M": 128, "BLOCK_N": 32, "BLOCK_K": 64, "SPLIT_K": 1},
+            num_stages=1,
+            num_warps=4,
+        ),
+        triton.Config(
+            {"BLOCK_M": 64, "BLOCK_N": 32, "BLOCK_K": 64, "SPLIT_K": 1},
+            num_stages=1,
+            num_warps=2,
+        ),
+    ]
+
 
 @triton.jit
 def _kernel_mcsr_bmm(a_cols, a_vals, b_vals, c_vals, 
@@ -153,7 +294,46 @@ def test_lower_triangular(B, M, K, N):
     print(f'info: triton bmm: {triton_ms:.4f}')
     print(torch.allclose(c_ref, triton_c_ref, atol=0.1, rtol=0.01))
 
-    #sys.exit(1)
+    times = []
+    for config in basic_configs:
+        BM = config.kwargs['BLOCK_M']
+        BN = config.kwargs['BLOCK_N']
+        BK = config.kwargs['BLOCK_K']
+        num_stages = config.num_stages
+        num_warps = config.num_warps
+        print(f'info: blocks: {BM} x {BK} x {BN}')
+        a_block, a_mask = to_block_format_with_mask_bmm_one_mask(a, BM, BK)
+        a_mask_cols = to_contiguous_nz_format_simple(a_mask)
+        
+        #print(a_mask_cols)
+        
+        #b_block, b_mask = to_block_format_with_mask_bmm_one_mask(b, BK, BN)
+        #print(a_mask_rowptrs, a_mask_cols)
+        c = gen_empty_matrix_dense_blocks(M, N, BM, BN, batch_size=B)
+
+        ms = torch.inf
+        try:
+            ms, _, _ = triton.testing.do_bench(lambda: 
+                mcsr_bmm_inner(B, M, K, N, BM, BK, BN, a_mask_cols, a_block, b, c[1], num_warps, num_stages), 
+            rep=50)
+            print(f'info: {num_stages} x {num_warps}, {ms:.4f}')
+            
+        except Exception as e:
+            print('info: run triton failed ({BM} x {BK} x {BN})')
+            print(type(e))
+            print(e)
+        verified = torch.allclose(c_ref, from_block_format(c[1]))
+        print('info: verify passes:', verified)
+        if verified:
+            times.append((ms, BM, BK, BN, num_stages, num_warps))
+    times.sort(key=lambda x: x[0])
+    best_time = times[0][0]
+    #print(f'info: blocksparse mm: {times[0][0]:.4f} ({BM} x {BK} x {BN})')
+    print(f'{B}x{M}x{K}x{N}', f'{torch_ms:.4f}', f'{triton_ms:.4f}', f'{best_time:.4f}', sep='; ')
+    sys.stdout.flush()
+    
+    
+    return
 
     BMs = [32, 64, 128, 256]
     BKs = [32, 64]
