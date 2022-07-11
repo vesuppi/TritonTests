@@ -25,8 +25,12 @@ def _kernel_mcsr_bmm(a_cols, a_vals, b_vals, c_vals,
     b_block_size = BK * BN
     a_ptrs = a_vals + a_block_size * nBK * m + \
         tl.arange(0, BM)[:, None] * BK + tl.arange(0, BK)[None, :]
-    b_ptrs = b_vals + b_block_size * n + \
-        tl.arange(0, BK)[:, None] * BN + tl.arange(0, BN)[None, :]
+    # b_ptrs = b_vals + b_block_size * n + \
+    #     tl.arange(0, BK)[:, None] * BN + tl.arange(0, BN)[None, :]
+
+    b_cols = n * BN + tl.arange(0, BN)
+    b_ptrs = b_vals + tl.arange(0, BK)[:, None] * N + b_cols[None, :]
+
 
     a_ptrs += bid * M * K
     b_ptrs += bid * K * N
@@ -64,14 +68,10 @@ def _kernel_mcsr_bmm(a_cols, a_vals, b_vals, c_vals,
     tl.store(c_ptrs, c)
 
 
-def mcsr_bmm_inner(a_cols, a_vals, b_vals, c, num_warps=4, num_stages=3):
-    B, nBM, nBK, BM, BK = a_vals.shape
-    B, nBK, nBN, BK, BN = b_vals.shape
-    # TODO: this does not work when M does not divide BM
-    # Or maybe it works because C will also need to be padded
-    M = nBM * BM 
-    N = nBN * BN
-
+def mcsr_bmm_inner(B, M, K, N, BM, BK, BN, a_cols, a_vals, b_vals, c, num_warps=4, num_stages=3):
+    nBM = cdiv(M, BM)
+    nBN = cdiv(N, BN)
+    nBK = cdiv(K, BK)
     grid = (nBM, nBN, B)
     binary = _kernel_mcsr_bmm[grid](a_cols, a_vals, b_vals, c,
                                     BM, BK, BN, nBM, nBK, nBN, 
@@ -142,22 +142,23 @@ def test_lower_triangular(B, M, K, N):
     print(f'info: torch bmm: {torch_ms:.4f}')
 
     triton_c_ref = torch.empty([B, M, N], dtype=dtype, device='cuda')
-    #triton_ms, _, _ = triton.testing.do_bench(lambda: bmm_out(a, b, triton_c_ref))
     triton_ms = 0
+    triton_ms, _, _ = triton.testing.do_bench(lambda: bmm_out(a, b, triton_c_ref))
+    
     print(f'info: triton bmm: {triton_ms:.4f}')
     print(torch.allclose(c_ref, triton_c_ref, atol=0.1, rtol=0.01))
 
     #sys.exit(1)
 
-    #BMs = [32, 64, 128, 256]
-    #BKs = [32, 64, 128, 256]
-    BMs = [32, 64, 128]
-    BKs = [32, 64, 128]
+    BMs = [32, 64, 128, 256]
+    BKs = [32, 64, 128, 256]
+    # BMs = [32, 64, 128]
+    # BKs = [32, 64, 128]
     BNs = [32, 64, 128]
     #stages = [1,2,3,4,5]
     #warps = [1,2,4,8]
     stages = [2,3,4,5]
-    warps = [1,2,4]
+    warps = [1,2,4,8]
     
 
     if TEST_RUN:
@@ -183,21 +184,25 @@ def test_lower_triangular(B, M, K, N):
                 
                 #print(a_mask_cols)
                 #sys.exit(1)
-                b_block, b_mask = to_block_format_with_mask_bmm_one_mask(b, BK, BN)
+                #b_block, b_mask = to_block_format_with_mask_bmm_one_mask(b, BK, BN)
                 #print(a_mask_rowptrs, a_mask_cols)
                 c = gen_empty_matrix_dense_blocks(M, N, BM, BN, batch_size=B)
 
                 times = []
                 ms = torch.inf
                 too_slow_count = 0
-                try:
-                    for num_stages in stages:
-                        for num_warps in warps:
-                            if BM * BK * BN >= 128 * 128 * 32 and num_warps == 1:
-                                continue
-                            if BM * BK * BN >= 128 * 128 * 64 and num_warps <= 2:
-                                continue
-                            ms, _, _ = triton.testing.do_bench(lambda: mcsr_bmm_inner(a_mask_cols, a_block, b_block, c[1], num_warps, num_stages), rep=50)
+                
+                for num_stages in stages:
+                    for num_warps in warps:
+                        if BM * BK * BN >= 128 * 128 * 32 and num_warps == 1:
+                            continue
+                        if BM * BK * BN >= 128 * 128 * 64 and num_warps <= 2:
+                            continue
+
+                        try:
+                            ms, _, _ = triton.testing.do_bench(lambda: 
+                                mcsr_bmm_inner(B, M, K, N, BM, BK, BN, a_mask_cols, a_block, b, c[1], num_warps, num_stages), 
+                            rep=50)
 
                             if ms > torch_ms * 2:
                                 too_slow_count += 1
@@ -205,10 +210,10 @@ def test_lower_triangular(B, M, K, N):
                                     raise Exception('Too Slow') 
                             print(f'info: {num_stages} x {num_warps}, {ms:.4f}')
                             times.append((ms, BM, BK, BN, num_stages, num_warps))
-                except Exception as e:
-                    print('info: run triton failed ({BM} x {BK} x {BN})')
-                    print(e)
-                    #raise e
+                        except Exception as e:
+                            print('info: run triton failed ({BM} x {BK} x {BN})')
+                            print(e)
+                            #raise e
                 verified = torch.allclose(c_ref, from_block_format(c[1]))
                 print('info: verify passes:', verified)
                 if verified:
@@ -225,8 +230,8 @@ def test_lower_triangular(B, M, K, N):
 
 def test_post_shapes_lower_tri():
     shapes = [
-        (32*16, 1024, 1024, 1024//16),
-        (32*16, 1024, 1024, 4096//16),
+        #(32*16, 1024, 1024, 1024//16),
+        #(32*16, 1024, 1024, 4096//16),
         (32*16, 1024, 1024, 8192//16),
         (32*16, 2048, 2048, 1024//16),
         (32*16, 2048, 2048, 4096//16),
@@ -249,9 +254,10 @@ def test_single_batch():
     
     shapes = [
         (1, 3072, 3072, 3072),
-        (16, 3072, 3072, 3072),
-        (64, 3072, 3072, 3072),
+        # (16, 3072, 3072, 3072),
+        # (64, 3072, 3072, 3072),
         (1, 4096, 4096, 4096),
+        (1, 8192, 8192, 8192),
     ]
     for shape in shapes:
         B, M, K, N = shape
@@ -270,7 +276,7 @@ args = parser.parse_args()
 B, M, K, N = args.b, args.m, args.k, args.n
 
 if M == 0:
-    #test_single_batch()
-    test_post_shapes_lower_tri()
+    test_single_batch()
+    #test_post_shapes_lower_tri()
 else:
     test_lower_triangular(B, M, K, N)
