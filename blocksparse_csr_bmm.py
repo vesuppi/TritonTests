@@ -156,7 +156,7 @@ def test_lower_triangular(B, M, K, N):
     #sys.exit(1)
 
     BMs = [32, 64, 128, 256]
-    BKs = [32, 64, 128, 256]
+    BKs = [32, 64]
     # BMs = [32, 64, 128]
     # BKs = [32, 64, 128]
     BNs = [32, 64, 128]
@@ -179,8 +179,8 @@ def test_lower_triangular(B, M, K, N):
                 if BM > M or BK > K or BN > N:
                     continue
                 
-                if BM * K != BK * M:
-                    continue
+                # if BM * K != BK * M:
+                #     continue
 
                 
                 print(f'info: blocks: {BM} x {BK} x {BN}')
@@ -212,14 +212,14 @@ def test_lower_triangular(B, M, K, N):
                             if ms > torch_ms * 2:
                                 too_slow_count += 1
                                 if too_slow_count == 5:
-                                    pass
-                                    #raise Exception('Too Slow') 
+                                
+                                    raise Exception('Too Slow') 
                             print(f'info: {num_stages} x {num_warps}, {ms:.4f}')
                             times.append((ms, BM, BK, BN, num_stages, num_warps))
                         except Exception as e:
                             print('info: run triton failed ({BM} x {BK} x {BN})')
                             print(type(e))
-                            #print(e)
+                            print(e)
                 
                             #raise e
                 verified = torch.allclose(c_ref, from_block_format(c[1]))
@@ -264,8 +264,8 @@ def test_single_batch():
         (1, 3072, 3072, 3072),
         # (16, 3072, 3072, 3072),
         # (64, 3072, 3072, 3072),
-        #(1, 4096, 4096, 4096),
-        #(1, 8192, 8192, 8192),
+        (1, 4096, 4096, 4096),
+        (1, 8192, 8192, 8192),
     ]
     for shape in shapes:
         B, M, K, N = shape
