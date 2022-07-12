@@ -1,5 +1,6 @@
 import sys
 import argparse
+from typing_extensions import runtime
 import torch
 print('imported torch')
 import triton 
@@ -7,7 +8,14 @@ import triton.language as tl
 from utils import *
 from torchinductor.triton_ops.batched_matmul import bmm_out
 from configs import basic_configs
-from blocksparse_kernels import bmm1
+from blocksparse_bmm_kernels import bmm1
+from time import strftime
+from datetime import datetime
+from pytz import timezone    
+
+sa_time = datetime.now(timezone('US/Pacific'))
+cur_time = sa_time.strftime('%Y-%m-%d_%H-%M')
+runtime_log = open(f'results/{cur_time}.log', 'w')
 
     
 def test_lower_triangular(B, M, K, N, is_tril=True):
@@ -78,8 +86,8 @@ def test_lower_triangular(B, M, K, N, is_tril=True):
     times.sort(key=lambda x: x[0])
     best_time = times[0][0]
     #print(f'info: blocksparse mm: {times[0][0]:.4f} ({BM} x {BK} x {BN})')
-    print(f'{B}x{M}x{K}x{N}', f'{torch_ms:.4f}', f'{triton_ms:.4f}', f'{best_time:.4f}', sep='; ')
-    sys.stdout.flush()
+    print(f'{B}x{M}x{K}x{N}', f'{torch_ms:.4f}', f'{triton_ms:.4f}', f'{best_time:.4f}', sep='; ', file=runtime_log)
+    runtime_log.flush()
     
     
     return
@@ -166,6 +174,7 @@ def test_lower_triangular(B, M, K, N, is_tril=True):
 #test_random()
 
 def test_post_shapes_lower_tri(test_dense=False):
+    print(f'# Test post shapes, also test dense case: {test_dense}', file=runtime_log)
     shapes = [
         (32*16, 1024, 1024, 1024//16),
         (32*16, 1024, 1024, 4096//16),
@@ -239,3 +248,7 @@ if M == 0:
     #test_torchbench_shapes(True)
 else:
     test_lower_triangular(B, M, K, N)
+
+
+
+runtime_log.close()

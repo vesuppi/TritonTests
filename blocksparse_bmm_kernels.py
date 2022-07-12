@@ -17,10 +17,6 @@ def _kernel1(a_cols, a_vals, b_vals, c_vals,
     n = tl.program_id(1)
     bid = tl.program_id(2)
 
-    M: tl.constexpr = BM * nBM
-    K: tl.constexpr = BK * nBK
-    N: tl.constexpr = BN * nBN
-
     # pid = tl.program_id(0)
     # bid = tl.program_id(1)
     # m = pid // nBN
