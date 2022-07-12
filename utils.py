@@ -1,5 +1,6 @@
 import sys
 import torch
+import triton
 
 class BCSR():
     def __init__(self, rowptrs, cols, vals) -> None:
@@ -97,6 +98,23 @@ def to_block_format_with_mask_bmm_one_mask(a, BLOCK_M: int, BLOCK_N: int):
             res[:, m, n, 0: BLOCK_M, 0: BLOCK_N] = block
             if torch.count_nonzero(block) == 0:
                 mask[m, n] = 0
+    return (res, mask)
+
+
+def to_triton_blocksparse_format(a, BLOCK_M: int, BLOCK_N: int):
+    # assert a.dim() == 3
+    assert BLOCK_M == BLOCK_N
+    
+    M, N = a.shape[-2], a.shape[-1]
+    outer_m_dim = cdiv(M, BLOCK_M)
+    outer_n_dim = cdiv(N, BLOCK_N)
+    # inner_m_dim = BLOCK_M
+    # inner_n_dim = BLOCK_N
+
+    mask = torch.ones([outer_m_dim, outer_n_dim], device=a.device, dtype=torch.bool)
+    mask = mask[None, :, :]
+    # import pdb; pdb.set_trace()
+    res = triton.testing.sparsify_tensor(a, mask, BLOCK_M)
     return (res, mask)
 
 
