@@ -279,7 +279,7 @@ def test_lower_triangular(B, M, K, N, is_tril=True):
     
 #test_random()
 
-def test_post_shapes_lower_tri():
+def test_post_shapes_lower_tri(test_dense=False):
     shapes = [
         (32*16, 1024, 1024, 1024//16),
         (32*16, 1024, 1024, 4096//16),
@@ -291,6 +291,11 @@ def test_post_shapes_lower_tri():
     for shape in shapes:
         B, M, K, N = shape
         test_lower_triangular(B, M, K, N)
+
+    if test_dense:
+        for shape in shapes:
+            B, M, K, N = shape
+            test_lower_triangular(B, M, K, N, False)
 
 
 def test_single_batch():
@@ -341,10 +346,10 @@ B, M, K, N = args.b, args.m, args.k, args.n
 
 if M == 0:
     #test_single_batch()
-    #test_post_shapes_lower_tri()
-    print('Test dense a')
-    test_torchbench_shapes(False)
-    print('Test lower tril a')
-    test_torchbench_shapes(True)
+    test_post_shapes_lower_tri(True)
+    #print('Test dense a')
+    #test_torchbench_shapes(False)
+    #print('Test lower tril a')
+    #test_torchbench_shapes(True)
 else:
     test_lower_triangular(B, M, K, N)
