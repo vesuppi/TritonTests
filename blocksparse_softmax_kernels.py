@@ -64,7 +64,7 @@ def softmax(x):
 
 
 @triton.jit
-def _rowwise_softmax_kernel(x_ptr, y_ptr, M: tl.constexpr, N: tl.constexpr, 
+def _rowwise_softmax_dense_kernel(x_ptr, y_ptr, M: tl.constexpr, N: tl.constexpr, 
                 BM: tl.constexpr, BN: tl.constexpr):
     m = tl.program_id(0)
     block_ptrs = x_ptr + m * BM * N + tl.arange(0, BN)
@@ -79,12 +79,52 @@ def _rowwise_softmax_kernel(x_ptr, y_ptr, M: tl.constexpr, N: tl.constexpr,
     tl.store(y_ptrs, y)
 
 
-def rowwise_softmax(x):
+def rowwise_softmax_dense(x):
     M, N = x.shape
     y = torch.empty_like(x)
     grid = (M,)
     BM = 1
     BN = triton.next_power_of_2(N)
     #softmax_kernel[grid](y, x, N, N, N, N)
-    _rowwise_softmax_kernel[grid](x, y, M, N, BM, BN)
+    _rowwise_softmax_dense_kernel[grid](x, y, M, N, BM, BN)
     return y
+
+
+class FastTrackMask:
+    def __init__(self, mask) -> None:
+        self.rowptrs, self.cols = to_contiguous_nz_format_simple(mask)
+
+
+
+# @triton.jit
+# def _rowwise_softmax_kernel(x_rowptrs, x_cols, x_data, y_data, M: tl.constexpr, N: tl.constexpr, 
+#                 BM: tl.constexpr, BN: tl.constexpr, use_dense_data: tl.constexpr,
+#                 TM: tl.constexpr, TN: tl.constexpr):
+#     m = tl.program_id(0)
+#     k_start = tl.load(x_cols + 2*m)
+#     k_end = tl.load(x_cols + 2*m+1)
+
+#     block_ptrs = x_data + tl.arange(0, BN)
+
+#     if use_dense_data:
+#         block_ptrs += m * BM * N
+
+#     row = tl.load(block_ptrs)
+#     max = tl.max(row, axis=0)
+#     normalized_row = row - max
+
+#     t0 = tl.exp(normalized_row)
+#     t1 = tl.sum(t0, axis=0)
+#     y = t0 / t1
+#     y_ptrs = y_ptr + m * BM * N + tl.arange(0, BN)
+#     tl.store(y_ptrs, y)
+
+
+# def rowwise_softmax(x_mask: FastTrackMask, x_data, M, N):
+#     y_data = torch.empty_like(x_data)
+#     grid = (M,)
+#     BM = 1
+#     BN = triton.next_power_of_2(N)
+#     #softmax_kernel[grid](y, x, N, N, N, N)
+#     _rowwise_softmax_kernel[grid](x_mask.rowptrs, x_mask.cols, y_data, M, N, BM, BN)
+#     return (x_mask, y_data)

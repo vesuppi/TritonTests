@@ -196,7 +196,12 @@ def to_contiguous_nz_format_simple(a, device='cuda'):
             
         cols[2*i] = start
         cols[2*i+1] = end
-    return cols
+
+    rowptrs = torch.empty(m+1, dtype=torch.int, device=device)
+    for i in range(m+1):
+        rowptrs[i] = 1
+    
+    return (rowptrs, cols)
 
 
 def gen_random_matrix(M, N, BM, BN, density=0.5, dtype=torch.float16, device='cuda'):

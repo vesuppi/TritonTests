@@ -1,6 +1,5 @@
 import sys
 import argparse
-from typing_extensions import runtime
 import torch
 print('imported torch')
 import triton 
@@ -8,7 +7,7 @@ import triton.language as tl
 from utils import *
 from torchinductor.triton_ops.batched_matmul import bmm_out
 from configs import basic_configs
-from blocksparse_bmm_kernels import bmm1, bmm2, bmm3
+from blocksparse_bmm_kernels import bmm1, bmm2, bmm3, bmm4, bmm5
 from time import strftime
 from datetime import datetime
 from pytz import timezone    
@@ -62,9 +61,9 @@ def test_lower_triangular(B, M, K, N, is_tril=True, runtime_log=sys.stdout):
         num_warps = config.num_warps
         print(f'info: blocks: {BM} x {BK} x {BN}')
         a_block, a_mask = to_block_format_with_mask_bmm_one_mask(a, BM, BK)
-        a_mask_cols = to_contiguous_nz_format_simple(a_mask)
+        a_mask_rowptrs, a_mask_cols = to_contiguous_nz_format_simple(a_mask)
         
-        #print(a_mask_cols)
+        #print(a_mask_rowptrs)
         
         b_block, b_mask = to_block_format_with_mask_bmm_one_mask(b, BK, BN)
         #print(a_mask_rowptrs, a_mask_cols)
@@ -73,7 +72,7 @@ def test_lower_triangular(B, M, K, N, is_tril=True, runtime_log=sys.stdout):
         ms = torch.inf
         try:
             ms, _, _ = triton.testing.do_bench(lambda: 
-                bmm3(B, M, K, N, BM, BK, BN, a_mask_cols, a_block, b_block, c[1], num_warps, num_stages), 
+                bmm5(B, M, K, N, BM, BK, BN, a_mask_rowptrs, a_mask_cols, a_block, b_block, c[1], num_warps, num_stages), 
             rep=50)
             print(f'info: {num_stages} x {num_warps}, {ms:.4f}')
             
@@ -171,8 +170,8 @@ args = parser.parse_args()
 B, M, K, N = args.b, args.m, args.k, args.n
 
 if args.t == 'post':
-    test_single_batch()
-    #test_post_shapes_lower_tri(True)
+    #test_single_batch()
+    test_post_shapes_lower_tri()
     #print('Test dense a')
     #test_torchbench_shapes(False)
     #print('Test lower tril a')
