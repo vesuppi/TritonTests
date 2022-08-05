@@ -180,7 +180,6 @@ def to_contiguous_nz_format_simple(a, device='cuda'):
             if j == 0:
                 if a[i,j] != 0:
                     start = j
-                    continue
 
             if j == n-1:
                 if a[i,j] != 0:
